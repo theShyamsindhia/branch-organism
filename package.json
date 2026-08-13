@@ -1,14 +1,14 @@
 {
   "name": "branch-organism",
   "private": true,
-  "version": "0.18.2",
+  "version": "0.18.3",
   "description": "A minimal living Git branch overlay.",
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && BRANCH_ORGANISM_DEV=1 electron .\"",
     "dev:web": "vite",
     "build": "vite build",
-    "package:mac": "npm run build && electron-packager . 'Branch Organism' --platform=darwin --arch=arm64 --out=work/release --overwrite --prune=true --asar --app-bundle-id=com.branchorganism.app --ignore='^/(work|outputs|tests|src|\\.github)(/|$)'",
+    "package:mac": "npm run build && electron-packager . 'Branch Organism' --platform=darwin --arch=arm64 --out=work/release --overwrite --prune=true --asar --app-bundle-id=com.branchorganism.app --icon=assets/BranchOrganism.icns --ignore='^/(work|outputs|tests|src|\\.github)(/|$)'",
     "start": "electron .",
     "test:electron": "npm run build && electron tests/electron-smoke.cjs",
     "test": "node --test tests/*.test.cjs",
