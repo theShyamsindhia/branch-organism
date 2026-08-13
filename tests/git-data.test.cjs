@@ -6,7 +6,7 @@ const path = require('node:path')
 const test = require('node:test')
 const { fetchRemote, getRemoteWebUrl, getWatchedAuthor, readBranchState, readRepositoryFingerprint, reconcilePullRequestState, resolveRepositoryPath, selectVisibleBranches, summarizeCheckRollup } = require('../electron/git-data.cjs')
 const { createRefreshQueue } = require('../electron/refresh-queue.cjs')
-const { clampWindowX, clampWindowY, isNearRightEdge, settleWindowBounds } = require('../electron/window-layout.cjs')
+const { clampWindowX, clampWindowY, isNearRightEdge, isPointInsideWindowRegion, settleWindowBounds } = require('../electron/window-layout.cjs')
 
 function run(repoPath, args) {
   return execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' }).trim()
@@ -45,6 +45,15 @@ test('keeps saved windows inside the current display', () => {
     settleWindowBounds({ x: 1900, y: -400, width: 540, height: 820 }, workArea),
     { docked: true, x: 820, y: 24 },
   )
+})
+
+test('detects the gripper inside a click-through window', () => {
+  const windowBounds = { x: 1260, y: 197, width: 540, height: 820 }
+  const gripperBounds = { x: 492, y: 758, width: 44, height: 44 }
+
+  assert.equal(isPointInsideWindowRegion({ x: 1774, y: 977 }, windowBounds, gripperBounds), true)
+  assert.equal(isPointInsideWindowRegion({ x: 1700, y: 977 }, windowBounds, gripperBounds), false)
+  assert.equal(isPointInsideWindowRegion({ x: 1774, y: 900 }, windowBounds, gripperBounds), false)
 })
 
 test('preserves a queued remote refresh while a local refresh is running', async () => {

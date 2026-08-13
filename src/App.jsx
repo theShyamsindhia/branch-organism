@@ -511,7 +511,7 @@ export default function App() {
   const [layout, setLayout] = useState(() => ({
     docked: !window.gitOverlay && new URLSearchParams(window.location.search).get('dock') === 'right',
   }))
-  const gripperReleaseTimer = useRef()
+  const gripperRef = useRef()
 
   useEffect(() => {
     if (!window.gitOverlay) return undefined
@@ -528,11 +528,6 @@ export default function App() {
       active = false
       unsubscribe()
     }
-  }, [])
-
-  useEffect(() => () => {
-    window.clearTimeout(gripperReleaseTimer.current)
-    window.gitOverlay?.setMousePassthrough(true)
   }, [])
 
   useEffect(() => {
@@ -570,6 +565,17 @@ export default function App() {
     }
   }, [])
 
+  useEffect(() => {
+    const bounds = gripperRef.current?.getBoundingClientRect()
+    if (!bounds) return
+    window.gitOverlay?.setGripperBounds({
+      height: bounds.height,
+      width: bounds.width,
+      x: bounds.x,
+      y: bounds.y,
+    })
+  }, [layout.docked])
+
   const content = useMemo(() => {
     if (state.status === 'ready') {
       return <GitTree currentTick={currentTick} state={state} upstreamMovement={upstreamMovement} />
@@ -577,23 +583,13 @@ export default function App() {
     return <EmptyState state={state} />
   }, [currentTick, state, upstreamMovement])
 
-  const wakeGripper = () => {
-    window.clearTimeout(gripperReleaseTimer.current)
-    window.gitOverlay?.setMousePassthrough(false)
-  }
-  const releaseGripper = () => {
-    window.clearTimeout(gripperReleaseTimer.current)
-    gripperReleaseTimer.current = window.setTimeout(() => window.gitOverlay?.setMousePassthrough(true), 320)
-  }
-
   return (
     <main className={`transparent-overlay ${layout.docked ? 'is-docked-right' : ''}`}>
       <div className="tree-canvas">{content}</div>
       <div
         aria-label="Drag to move the Git tree"
         className="tree-gripper"
-        onMouseEnter={wakeGripper}
-        onMouseLeave={releaseGripper}
+        ref={gripperRef}
         role="button"
         title="Drag tree"
       >

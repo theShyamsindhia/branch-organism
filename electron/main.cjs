@@ -3,10 +3,11 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { fetchPullRequestHeads, fetchRemote, readGitHubPullRequests, reconcilePullRequestState } = require('./git-data.cjs')
 const { createRefreshQueue } = require('./refresh-queue.cjs')
-const { isNearRightEdge, settleWindowBounds } = require('./window-layout.cjs')
+const { isNearRightEdge, isPointInsideWindowRegion, settleWindowBounds } = require('./window-layout.cjs')
 
 const LOCAL_REFRESH_MS = 5000
 const REMOTE_REFRESH_MS = 60 * 1000
+const GRIPPER_HIT_TEST_MS = 50
 const DEFAULT_REPO_PATH = process.cwd()
 
 let overlayWindow
@@ -22,7 +23,9 @@ let layoutState = { docked: false }
 let moveTimer
 let positioningWindow = false
 let movingWindow = false
-let pendingMousePassthrough = false
+let mousePassthrough = true
+let gripperBounds
+let gripperHitTestTimer
 let gitWorker
 let workerRequestId = 0
 let repoGeneration = 0
@@ -180,6 +183,22 @@ function handleWindowMove() {
     saveSettings({ layout: { x: settled.x, y: settled.y, docked: settled.docked } })
     publishLayoutState()
   }, 220)
+}
+
+function setMousePassthrough(ignore) {
+  if (!overlayWindow || overlayWindow.isDestroyed() || mousePassthrough === ignore) return
+  mousePassthrough = ignore
+  overlayWindow.setIgnoreMouseEvents(ignore, { forward: true })
+}
+
+function updateGripperInteractivity() {
+  if (!overlayWindow || overlayWindow.isDestroyed() || !overlayWindow.isVisible() || movingWindow) return
+  const overGripper = isPointInsideWindowRegion(
+    screen.getCursorScreenPoint(),
+    overlayWindow.getBounds(),
+    gripperBounds,
+  )
+  setMousePassthrough(!overGripper)
 }
 
 function toggleOverlay() {
@@ -382,19 +401,16 @@ function createOverlay() {
   overlayWindow.setAlwaysOnTop(true, 'floating')
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   overlayWindow.setIgnoreMouseEvents(true, { forward: true })
+  mousePassthrough = true
   placeWindow(overlayWindow)
   overlayWindow.on('move', handleWindowMove)
   overlayWindow.on('will-move', () => {
     movingWindow = true
-    pendingMousePassthrough = false
-    overlayWindow.setIgnoreMouseEvents(false)
+    setMousePassthrough(false)
   })
   overlayWindow.on('moved', () => {
     movingWindow = false
-    if (pendingMousePassthrough) {
-      pendingMousePassthrough = false
-      overlayWindow.setIgnoreMouseEvents(true, { forward: true })
-    }
+    updateGripperInteractivity()
   })
 
   if (process.env.BRANCH_ORGANISM_DEV === '1') {
@@ -436,15 +452,15 @@ if (!hasSingleInstanceLock) {
   refreshQueue = createRefreshQueue(runRefresh)
   ipcMain.handle('git-state:get', () => branchState)
   ipcMain.handle('layout-state:get', () => layoutState)
-  ipcMain.on('overlay:mouse-passthrough', (event, ignore) => {
+  ipcMain.on('overlay:gripper-bounds', (event, bounds) => {
     if (event.sender !== overlayWindow?.webContents) return
-    if (ignore && movingWindow) {
-      pendingMousePassthrough = true
-      return
-    }
-    overlayWindow?.setIgnoreMouseEvents(Boolean(ignore), { forward: true })
+    const values = [bounds?.x, bounds?.y, bounds?.width, bounds?.height]
+    if (!values.every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0) return
+    gripperBounds = bounds
+    updateGripperInteractivity()
   })
   createOverlay()
+  gripperHitTestTimer = setInterval(updateGripperInteractivity, GRIPPER_HIT_TEST_MS)
   tray = new Tray(createTrayIcon())
   tray.setIgnoreDoubleClickEvents(true)
   tray.on('click', toggleOverlay)
@@ -475,6 +491,7 @@ app.on('before-quit', () => {
 app.on('will-quit', () => {
   clearInterval(localRefreshTimer)
   clearInterval(remoteRefreshTimer)
+  clearInterval(gripperHitTestTimer)
   clearTimeout(moveTimer)
   stopGitWorker()
   globalShortcut.unregisterAll()
