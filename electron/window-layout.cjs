@@ -7,23 +7,33 @@ function isNearRightEdge(bounds, workArea, distance = RIGHT_SNAP_DISTANCE) {
 }
 
 function clampWindowY(y, height, workArea) {
+  const maximum = Math.max(workArea.y, workArea.y + workArea.height - height)
   return Math.min(
-    workArea.y + workArea.height - height,
+    maximum,
     Math.max(workArea.y, y),
   )
+}
+
+function clampWindowX(x, width, workArea) {
+  const maximum = Math.max(workArea.x, workArea.x + workArea.width - width)
+  return Math.min(maximum, Math.max(workArea.x, x))
 }
 
 function settleWindowBounds(bounds, workArea) {
   const docked = isNearRightEdge(bounds, workArea)
   return {
     docked,
-    x: docked ? workArea.x + workArea.width - bounds.width : bounds.x,
+    x: docked
+      ? Math.max(workArea.x, workArea.x + workArea.width - bounds.width)
+      : clampWindowX(bounds.x, bounds.width, workArea),
     y: clampWindowY(bounds.y, bounds.height, workArea),
   }
 }
 
 module.exports = {
   RIGHT_SNAP_DISTANCE,
+  clampWindowX,
+  clampWindowY,
   isNearRightEdge,
   settleWindowBounds,
 }

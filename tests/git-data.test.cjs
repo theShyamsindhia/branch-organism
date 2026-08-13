@@ -4,8 +4,9 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
-const { fetchRemote, getRemoteWebUrl, readBranchState, resolveRepositoryPath, selectVisibleBranches, summarizeCheckRollup } = require('../electron/git-data.cjs')
-const { isNearRightEdge, settleWindowBounds } = require('../electron/window-layout.cjs')
+const { fetchRemote, getRemoteWebUrl, readBranchState, readRepositoryFingerprint, resolveRepositoryPath, selectVisibleBranches, summarizeCheckRollup } = require('../electron/git-data.cjs')
+const { createRefreshQueue } = require('../electron/refresh-queue.cjs')
+const { clampWindowX, clampWindowY, isNearRightEdge, settleWindowBounds } = require('../electron/window-layout.cjs')
 
 function run(repoPath, args) {
   return execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' }).trim()
@@ -33,6 +34,35 @@ test('keeps a freely positioned window upright', () => {
   const bounds = { x: 310, y: 52, width: 540, height: 820 }
 
   assert.deepEqual(settleWindowBounds(bounds, workArea), { docked: false, x: 310, y: 52 })
+})
+
+test('keeps saved windows inside the current display', () => {
+  const workArea = { x: 80, y: 24, width: 1280, height: 720 }
+
+  assert.equal(clampWindowX(-900, 540, workArea), 80)
+  assert.equal(clampWindowY(900, 820, workArea), 24)
+  assert.deepEqual(
+    settleWindowBounds({ x: 1900, y: -400, width: 540, height: 820 }, workArea),
+    { docked: true, x: 820, y: 24 },
+  )
+})
+
+test('preserves a queued remote refresh while a local refresh is running', async () => {
+  const calls = []
+  let finishFirst
+  const firstRun = new Promise((resolve) => { finishFirst = resolve })
+  const queue = createRefreshQueue(async ({ fetch }) => {
+    calls.push(fetch)
+    if (calls.length === 1) await firstRun
+  })
+
+  const running = queue.request()
+  queue.request({ fetch: true })
+  queue.request()
+  finishFirst()
+  await running
+
+  assert.deepEqual(calls, [false, true])
 })
 
 test('marks a branch behind dev as stale', (context) => {
@@ -66,6 +96,23 @@ test('marks a branch behind dev as stale', (context) => {
   assert.equal(feature.commits[0].subject, 'feature')
   assert.equal(state.baseCommits[0].subject, 'dev moved')
   assert.equal(feature.stale, true)
+  assert.ok(readRepositoryFingerprint(repoPath))
+})
+
+test('invalidates a cached snapshot when checkout changes at the same commit', (context) => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'branch-organism-fingerprint-'))
+  context.after(() => fs.rmSync(repoPath, { recursive: true, force: true }))
+
+  run(repoPath, ['init', '-b', 'main'])
+  run(repoPath, ['config', 'user.name', 'Branch Test'])
+  run(repoPath, ['config', 'user.email', 'branch@test.local'])
+  fs.writeFileSync(path.join(repoPath, 'seed.txt'), 'seed\n')
+  run(repoPath, ['add', 'seed.txt'])
+  run(repoPath, ['commit', '-m', 'seed'])
+  const mainFingerprint = readRepositoryFingerprint(repoPath)
+  run(repoPath, ['switch', '-c', 'feature/same-commit'])
+
+  assert.notEqual(readRepositoryFingerprint(repoPath), mainFingerprint)
 })
 
 test('normalizes GitHub remotes into browser URLs', () => {

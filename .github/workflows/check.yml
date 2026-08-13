@@ -1,0 +1,26 @@
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run test:electron
+      - run: npm run package:mac
+      - run: codesign --force --deep --sign - "work/release/Branch Organism-darwin-arm64/Branch Organism.app"
+      - run: codesign --verify --deep --strict "work/release/Branch Organism-darwin-arm64/Branch Organism.app"
