@@ -1,11 +1,33 @@
 const { app, BrowserWindow, ipcMain, utilityProcess } = require('electron')
+const { execFileSync } = require('node:child_process')
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 
 const outputPath = process.argv.find((argument) => argument.startsWith('--output='))?.slice('--output='.length)
   || path.join(process.cwd(), 'work', 'electron-smoke.json')
+let smokeRepoPath
+
+function runGit(args) {
+  return execFileSync('git', ['-C', smokeRepoPath, ...args], { encoding: 'utf8' }).trim()
+}
+
+function createSmokeRepository() {
+  smokeRepoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'branch-organism-electron-'))
+  runGit(['init', '-b', 'dev'])
+  runGit(['config', 'user.name', 'Branch Organism Smoke'])
+  runGit(['config', 'user.email', 'smoke@branch-organism.invalid'])
+  fs.writeFileSync(path.join(smokeRepoPath, 'seed.txt'), 'seed\n')
+  runGit(['add', 'seed.txt'])
+  runGit(['commit', '-m', 'seed'])
+  runGit(['switch', '-c', 'feature/smoke'])
+  fs.writeFileSync(path.join(smokeRepoPath, 'feature.txt'), 'feature\n')
+  runGit(['add', 'feature.txt'])
+  runGit(['commit', '-m', 'feature'])
+}
 
 app.whenReady().then(async () => {
+  createSmokeRepository()
   const worker = utilityProcess.fork(path.join(process.cwd(), 'electron', 'git-worker.cjs'), [], {
     serviceName: 'Branch Organism Smoke Git Snapshot',
     stdio: 'ignore',
@@ -22,7 +44,7 @@ app.whenReady().then(async () => {
     worker.postMessage({
       id: 1,
       pullRequestState: { status: 'idle', pullRequests: [] },
-      repoPath: process.cwd(),
+      repoPath: smokeRepoPath,
     })
   })
   const [stateFromWorker, timerDelayMs] = await Promise.all([branchState, timerDelay])
@@ -69,9 +91,12 @@ app.whenReady().then(async () => {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })
   fs.writeFileSync(outputPath, JSON.stringify({ ...state, errors, timerDelayMs }, null, 2))
   worker.kill()
+  fs.rmSync(smokeRepoPath, { force: true, recursive: true })
   app.quit()
 }).catch((error) => {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true })
   fs.writeFileSync(outputPath, JSON.stringify({ error: error.message }, null, 2))
+  fs.rmSync(smokeRepoPath, { force: true, recursive: true })
+  process.stderr.write(`[electron-smoke] ${error.stack || error.message}\n`)
   app.exit(1)
 })
