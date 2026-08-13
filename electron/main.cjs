@@ -1,7 +1,7 @@
 const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray, utilityProcess } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
-const { fetchRemote, readGitHubPullRequests } = require('./git-data.cjs')
+const { fetchPullRequestHeads, fetchRemote, readGitHubPullRequests, reconcilePullRequestState } = require('./git-data.cjs')
 const { createRefreshQueue } = require('./refresh-queue.cjs')
 const { isNearRightEdge, settleWindowBounds } = require('./window-layout.cjs')
 
@@ -338,8 +338,9 @@ async function runRefresh({ fetch }) {
       publishBranchState()
       fetchState = await fetchRemote(targetRepoPath)
       const nextPullRequestState = await readGitHubPullRequests(targetRepoPath)
+      if (nextPullRequestState.status === 'ready') await fetchPullRequestHeads(targetRepoPath, nextPullRequestState)
       if (generation !== repoGeneration || targetRepoPath !== repoPath) return
-      pullRequestState = nextPullRequestState
+      pullRequestState = reconcilePullRequestState(pullRequestState, nextPullRequestState)
     }
 
     const nextState = await readBranchStateAsync(targetRepoPath, pullRequestState)

@@ -175,6 +175,29 @@ body {
   stroke: rgba(235, 241, 238, 0.78);
 }
 
+.tree-branch--pull-request .branch-stem {
+  stroke-width: 1.05;
+  stroke-dasharray: 2.5 3.8;
+  opacity: 0.82;
+}
+
+.tree-branch--pull-request .branch-commit {
+  fill: rgba(24, 29, 28, 0.36);
+}
+
+.tree-branch--draft {
+  opacity: calc(var(--branch-opacity) * 0.56);
+}
+
+.tree-branch--merging {
+  transform-box: view-box;
+  animation: pr-merge-collapse 1400ms cubic-bezier(0.65, 0, 0.2, 1) forwards;
+}
+
+.tree-branch--closing {
+  animation: pr-close 720ms ease-out forwards;
+}
+
 .branch-commit {
   fill: rgba(24, 29, 28, 0.82);
   stroke: var(--branch-color);
@@ -347,6 +370,21 @@ body {
   vector-effect: non-scaling-stroke;
 }
 
+.recent-merge__ring {
+  fill: rgba(24, 29, 28, 0.9) !important;
+  stroke: var(--branch-color);
+  stroke-width: 1.25;
+  opacity: 0.68;
+  vector-effect: non-scaling-stroke;
+}
+
+.recent-merge__label {
+  fill: var(--branch-color);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 5.8px;
+  opacity: 0.48;
+}
+
 .base-spine--current .base-spine__line {
   stroke-width: 1.5;
 }
@@ -445,6 +483,32 @@ body {
   line-height: 1.5;
 }
 
+@keyframes pr-merge-collapse {
+  from {
+    opacity: var(--branch-opacity);
+    transform: translate(0, 0) scaleX(1);
+  }
+
+  72% {
+    opacity: 0.72;
+  }
+
+  to {
+    opacity: 0;
+    transform: translate(var(--merge-shift-x), var(--merge-shift-y)) scaleX(0.015);
+  }
+}
+
+@keyframes pr-close {
+  from {
+    opacity: var(--branch-opacity);
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .organism-growth {
     animation: none;
@@ -454,5 +518,10 @@ body {
   .current-ring,
   .spine-current-ring {
     transition: none;
+  }
+
+  .tree-branch--merging,
+  .tree-branch--closing {
+    animation-duration: 1ms;
   }
 }

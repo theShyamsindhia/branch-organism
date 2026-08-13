@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 const PALETTE = ['#78a99d', '#b29a70', '#879aba', '#ad786f', '#7f9b76', '#a38198', '#6e9bab', '#a88b79']
+const PR_AUTHOR_COLORS = {
+  Arnav: '#b29a70',
+  Bishal: '#78a99d',
+  Raj: '#6e9bab',
+  Sammy: '#ad786f',
+}
 const SPINE_SEGMENTS = [
   [{ x: 332, y: 62 }, { x: 400, y: 104 }, { x: 350, y: 240 }, { x: 398, y: 330 }],
   [{ x: 398, y: 330 }, { x: 452, y: 430 }, { x: 414, y: 610 }, { x: 520, y: 720 }],
@@ -156,10 +162,14 @@ function checkSummary(checks) {
 
 function prSummary(branch) {
   if (!branch.pullRequest) return 'no pull request'
-  const state = branch.pullRequest.state === 'MERGED'
+  const state = branch.lifecycle === 'merging'
+    ? 'merging'
+    : branch.lifecycle === 'closing'
+      ? 'closed without merge'
+      : branch.pullRequest.state === 'MERGED'
     ? 'merged'
     : (branch.pullRequest.mergeStateStatus || branch.pullRequest.state || '').toLowerCase()
-  return `PR #${branch.pullRequest.number} · ${state}`
+  return `${branch.pullRequest.isDraft ? 'draft PR' : 'PR'} #${branch.pullRequest.number} · ${state}`
 }
 
 function selectRestingBranches(branches, currentOnSpine, limit = 7) {
@@ -168,10 +178,13 @@ function selectRestingBranches(branches, currentOnSpine, limit = 7) {
     .map((branch, sourceIndex) => ({
       branch,
       sourceIndex,
-      score: (branch.isCurrent ? 10000 : 0)
+      score: (branch.lifecycle && branch.lifecycle !== 'open' ? 12000 : 0)
+        + (branch.isCurrent ? 10000 : 0)
+        + (branch.isPullRequest ? 7000 : 0)
         + (branch.conflict ? 5000 : 0)
         + (branch.ahead > 0 ? 2000 + Math.min(branch.ahead, 100) * 10 : 0)
         + (branch.pullRequest?.state === 'OPEN' ? 500 : 0)
+        - (branch.isPullRequest ? Math.min(branch.ageDays || 0, 180) * 140 : 0)
         - sourceIndex,
     }))
     .sort((left, right) => right.score - left.score)
@@ -225,13 +238,20 @@ function branchGeometry(branch, index, spinePosition) {
   return { curve, hash, startX, startY, stem, tipX, tipY }
 }
 
-function TreeBranch({ branch, currentTick, index, spinePosition }) {
+function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosition }) {
   const geometry = branchGeometry(branch, index, spinePosition)
   const { curve, hash, startX, startY, stem, tipX, tipY } = geometry
-  const color = PALETTE[hash % PALETTE.length]
+  const mergePoint = pointOnSpine(mergeSpinePosition ?? spinePosition)
+  const color = PR_AUTHOR_COLORS[branch.pullRequest?.authorName] || PALETTE[hash % PALETTE.length]
   const opacity = ageOpacity(branch)
   const commits = (branch.commits || []).slice(0, 5).reverse()
-  const statusLabel = branch.conflict ? 'conflict' : null
+  const statusLabel = branch.conflict
+    ? 'conflict'
+    : branch.lifecycle === 'merging'
+      ? 'merged'
+      : branch.lifecycle === 'closing'
+        ? 'closed'
+        : branch.pullRequest?.isDraft ? 'draft' : null
   const labelX = tipX - 8
   const labelAnchor = 'end'
   const cardX = tipX < 250 ? clamp(tipX + 12, 12, 306) : clamp(tipX - 206, 12, 306)
@@ -239,12 +259,20 @@ function TreeBranch({ branch, currentTick, index, spinePosition }) {
   const currentLabel = branch.sha
     ? `current · ${trimName(branch.name, 15)} · ${branch.sha}`
     : `current · ${trimName(branch.name, 20)}`
-  const restingLabel = `${trimName(branch.name, 15)} · ${branch.sha || 'unknown'}`
+  const restingLabel = branch.isPullRequest
+    ? `${branch.pullRequest.authorName} · #${branch.pullRequest.number}`
+    : `${trimName(branch.name, 15)} · ${branch.sha || 'unknown'}`
 
   return (
     <g
-      className={`tree-branch ${branch.isCurrent ? 'tree-branch--current' : ''} ${branch.conflict ? 'tree-branch--conflict' : ''} ${currentTick && branch.isCurrent ? 'is-tick' : ''}`}
-      style={{ '--branch-color': color, '--branch-opacity': opacity }}
+      className={`tree-branch ${branch.isCurrent ? 'tree-branch--current' : ''} ${branch.isPullRequest ? 'tree-branch--pull-request' : ''} ${branch.pullRequest?.isDraft ? 'tree-branch--draft' : ''} ${branch.lifecycle === 'merging' ? 'tree-branch--merging' : ''} ${branch.lifecycle === 'closing' ? 'tree-branch--closing' : ''} ${branch.conflict ? 'tree-branch--conflict' : ''} ${currentTick && branch.isCurrent ? 'is-tick' : ''}`}
+      style={{
+        '--branch-color': color,
+        '--branch-opacity': opacity,
+        '--merge-shift-x': `${mergePoint.x - startX}px`,
+        '--merge-shift-y': `${mergePoint.y - startY}px`,
+        transformOrigin: `${startX}px ${startY}px`,
+      }}
     >
       <path className="branch-hit-area" d={stem} />
       <circle className="branch-junction-ring" cx={startX} cy={startY} r="5">
@@ -261,7 +289,7 @@ function TreeBranch({ branch, currentTick, index, spinePosition }) {
         )
       })}
       <circle className="branch-tip" cx={tipX} cy={tipY} r={branch.isCurrent ? 4.5 : 3}>
-        <title>{branch.sha || branch.name} · branch head</title>
+        <title>{branch.isPullRequest ? `${branch.pullRequest.authorName} · PR #${branch.pullRequest.number}` : branch.sha || branch.name} · branch head</title>
       </circle>
       {branch.isCurrent && <circle className="current-ring" cx={tipX} cy={tipY} r="9" />}
       {branch.conflict && (
@@ -276,6 +304,7 @@ function TreeBranch({ branch, currentTick, index, spinePosition }) {
       <foreignObject className="branch-hover-card" x={cardX} y={cardY} width="202" height="132">
         <div className="branch-hover-card__surface" xmlns="http://www.w3.org/1999/xhtml">
           <strong>{branch.name}</strong>
+          {branch.pullRequest?.authorName && <span>{branch.pullRequest.authorName} · @{branch.pullRequest.authorLogin}</span>}
           <span>{prSummary(branch)}</span>
           {branch.pullRequest?.title && <span className="branch-hover-card__pr-title">{branch.pullRequest.title}</span>}
           <span>{checkSummary(branch.pullRequest?.checks)}</span>
@@ -289,6 +318,9 @@ function TreeBranch({ branch, currentTick, index, spinePosition }) {
 
 function GitTree({ state, currentTick, upstreamMovement }) {
   const visibleBranches = state.branches.slice(0, 15)
+  const pullRequestBranches = state.pullRequestBranches || []
+  const pullRequestBranchNames = new Set(pullRequestBranches.map((branch) => branch.name))
+  const recentMerges = state.recentMerges || []
   const base = state.remote?.base?.remoteRef || state.comparisonBase || state.base
   const baseAhead = state.remote?.base?.ahead || 0
   const baseIncoming = state.remote?.base?.behind || 0
@@ -303,11 +335,17 @@ function GitTree({ state, currentTick, upstreamMovement }) {
     && Boolean(state.remote?.base?.remoteRef)
     && baseAhead === 0
     && baseIncoming === 0
-  const branches = selectRestingBranches(visibleBranches, currentOnSpine)
+  const branches = selectRestingBranches([
+    ...pullRequestBranches,
+    ...visibleBranches.filter((branch) => !pullRequestBranchNames.has(branch.name)),
+  ], currentOnSpine)
   const branchDistances = branches
     .map((branch) => branch.baseDistance)
     .filter((distance) => Number.isFinite(distance) && distance >= 0)
-  const maxBaseDistance = Math.max(rememberedIncoming, baseCommits.length - 1, ...branchDistances, 1)
+  const mergeDistances = recentMerges
+    .map((merge) => merge.mergeDistance)
+    .filter((distance) => Number.isFinite(distance) && distance >= 0)
+  const maxBaseDistance = Math.max(rememberedIncoming, baseCommits.length - 1, ...branchDistances, ...mergeDistances, 1)
   const spinePositionAtDistance = (distance) => {
     const ratio = Math.log1p(Math.max(0, distance)) / Math.log1p(maxBaseDistance)
     return 0.15 + ratio * 0.7
@@ -381,6 +419,20 @@ function GitTree({ state, currentTick, upstreamMovement }) {
               </circle>
             )
           })}
+          {recentMerges.map((merge, mergeIndex) => {
+            const point = basePointAt(merge.mergeDistance)
+            const color = PR_AUTHOR_COLORS[merge.authorName] || PALETTE[mergeIndex % PALETTE.length]
+            return (
+              <g className="recent-merge" key={`${merge.number}-${merge.mergeSha}`} style={{ '--branch-color': color }}>
+                <circle className="recent-merge__ring" cx={point.x} cy={point.y} r="4.2">
+                  <title>{merge.authorName} merged PR #{merge.number} · {merge.title}</title>
+                </circle>
+                <text className="recent-merge__label" textAnchor="end" x={point.x - 7} y={point.y - 5 - (mergeIndex % 2) * 6}>
+                  {merge.authorName} · #{merge.number}
+                </text>
+              </g>
+            )
+          })}
           {currentOnSpine && (
             <g className={`spine-current-position ${baseFullySynced ? 'is-synced' : ''}`}>
               <title>Current: {state.current} at {currentBranch?.sha || baseBranch?.sha || 'unknown commit'}</title>
@@ -414,7 +466,8 @@ function GitTree({ state, currentTick, upstreamMovement }) {
             branch={branch}
             currentTick={currentTick}
             index={index}
-            key={branch.name}
+            key={branch.isPullRequest ? `pr-${branch.pullRequest.number}` : branch.name}
+            mergeSpinePosition={Number.isFinite(branch.mergeDistance) ? spinePositionAtDistance(branch.mergeDistance) : undefined}
             spinePosition={branchSpinePosition(branch, index)}
           />
         ))}

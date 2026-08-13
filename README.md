@@ -7,6 +7,8 @@ A transparent, always-on-top Git tree. Its resting view reduces the repository t
 - branch length follows commits ahead, with real commit nodes and a short head SHA;
 - current, upstream movement, and conflicts speak loudly while healthy or stale refs recede;
 - conflicts use a broken rust stem and a clean cross at the branch head;
+- open PRs from Raj (`xrehpicx`), Arnav (`AR13570`), Bishal (`ZenderGoD`), and Sammy (`ungaaaabungaaa`) replace their duplicate branch with a dashed ghost limb and real PR commit nodes;
+- merged PR limbs contract into their recorded merge checkpoint; closed-unmerged limbs only fade, while recent merges leave quiet rings on the spine;
 - hovering a branch reveals its full name, PR state/title, CI rollup, ahead/behind counts, and last activity;
 - a checked-out ref at the base head collapses onto the same spine commit instead of inventing divergence;
 - the current marker briefly ticks every four seconds;
@@ -15,6 +17,8 @@ A transparent, always-on-top Git tree. Its resting view reduces the repository t
 - local refs refresh every five seconds and remotes fetch every minute.
 
 Git topology snapshots run in a background utility process, so large repositories cannot block the tray or window movement. Unchanged refs reuse the last snapshot, and remote refresh requests are queued rather than dropped.
+
+Watched PR heads are fetched into the app-owned `refs/branch-organism/pr/*` namespace for exact ancestry without creating, checking out, or modifying working branches.
 
 Remote refs refresh once a minute. When the tracked base branch falls behind its remote, a faint dashed ghost curves from the local checkpoint to the newer upstream head. It disappears once the two refs are synced.
 

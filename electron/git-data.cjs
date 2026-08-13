@@ -3,6 +3,14 @@ const fs = require('node:fs')
 const path = require('node:path')
 
 const MAX_BRANCHES = 15
+const PR_TRANSITION_MS = 60 * 1000
+const RECENT_MERGE_MS = 24 * 60 * 60 * 1000
+const WATCHED_PR_AUTHORS = Object.freeze({
+  ar13570: 'Arnav',
+  ungaaaabungaaa: 'Sammy',
+  xrehpicx: 'Raj',
+  zendergod: 'Bishal',
+})
 
 function git(repoPath, args, options = {}) {
   try {
@@ -117,6 +125,70 @@ function summarizeCheckRollup(checks = []) {
   }, { total: 0, passed: 0, failed: 0, pending: 0 })
 }
 
+function getWatchedAuthor(author) {
+  const login = typeof author === 'string' ? author : author?.login
+  return login ? WATCHED_PR_AUTHORS[login.toLowerCase()] || null : null
+}
+
+function normalizePullRequest({ statusCheckRollup, ...pullRequest }) {
+  const authorLogin = typeof pullRequest.author === 'string'
+    ? pullRequest.author
+    : pullRequest.author?.login || null
+  const authorName = getWatchedAuthor(authorLogin)
+  const mergeCommitSha = typeof pullRequest.mergeCommit === 'string'
+    ? pullRequest.mergeCommit
+    : pullRequest.mergeCommit?.oid || null
+  const commits = (pullRequest.commits || []).slice(-6).map((commit) => ({
+    sha: (commit.sha || commit.oid || '').slice(0, 7),
+    subject: commit.subject || commit.messageHeadline || 'commit',
+    timestamp: commit.timestamp || Math.floor(Date.parse(commit.committedDate || '') / 1000) || 0,
+  }))
+
+  return {
+    ...pullRequest,
+    authorLogin,
+    authorName,
+    checks: pullRequest.checks || summarizeCheckRollup(statusCheckRollup),
+    commits,
+    headSha: pullRequest.headSha || pullRequest.headRefOid?.slice(0, 7) || commits.at(-1)?.sha || null,
+    mergeCommitSha,
+    watched: Boolean(authorName),
+  }
+}
+
+function runPullRequestQuery(executable, repository, state, limit, { includeCommits = false } = {}) {
+  const fields = [
+    'number', 'headRefName', 'baseRefName', 'headRefOid', 'baseRefOid', 'author', 'isDraft', 'mergeCommit',
+    'mergeable', 'mergeStateStatus', 'title', 'url', 'state', 'mergedAt', 'updatedAt', 'statusCheckRollup',
+    ...(includeCommits ? ['commits'] : []),
+  ].join(',')
+  return new Promise((resolve, reject) => {
+    execFile(executable, [
+      '-R', repository,
+      'pr', 'list',
+      '--state', state,
+      '--limit', String(limit),
+      '--json', fields,
+    ], {
+      encoding: 'utf8',
+      maxBuffer: 2 * 1024 * 1024,
+      timeout: 30000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr?.trim() || error.message))
+        return
+      }
+
+      try {
+        resolve(JSON.parse(stdout).map(normalizePullRequest))
+      } catch (parseError) {
+        reject(parseError)
+      }
+    })
+  })
+}
+
 function readGitHubPullRequests(repoPath) {
   const originUrl = git(repoPath, ['remote', 'get-url', 'origin'], { allowFailure: true })
   const webUrl = getRemoteWebUrl(originUrl)
@@ -126,34 +198,45 @@ function readGitHubPullRequests(repoPath) {
   if (!executable) return Promise.resolve({ status: 'unavailable', pullRequests: [] })
   const repository = webUrl.replace(/^https?:\/\//, '')
 
-  return new Promise((resolve) => {
-    execFile(executable, [
-      '-R', repository,
-      'pr', 'list',
-      '--state', 'all',
-      '--limit', '100',
-      '--json', 'number,headRefName,baseRefName,mergeable,mergeStateStatus,title,url,state,mergedAt,updatedAt,statusCheckRollup',
-    ], {
-      encoding: 'utf8',
-      timeout: 30000,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-    }, (error, stdout, stderr) => {
-      if (error) {
-        resolve({ status: 'error', message: stderr?.trim() || error.message, pullRequests: [] })
-        return
-      }
+  return Promise.all([
+    runPullRequestQuery(executable, repository, 'open', 40, { includeCommits: true }),
+    runPullRequestQuery(executable, repository, 'closed', 30),
+  ]).then(([openPullRequests, closedPullRequests]) => {
+    const pullRequests = [...openPullRequests, ...closedPullRequests]
+      .filter((pullRequest, index, all) => all.findIndex((candidate) => candidate.number === pullRequest.number) === index)
+      .sort((left, right) => Date.parse(right.updatedAt || '') - Date.parse(left.updatedAt || ''))
+    return { status: 'ready', pullRequests, checkedAt: Date.now() }
+  }).catch((error) => ({ status: 'error', message: error.message, pullRequests: [] }))
+}
 
-      try {
-        const pullRequests = JSON.parse(stdout).map(({ statusCheckRollup, ...pullRequest }) => ({
-          ...pullRequest,
-          checks: summarizeCheckRollup(statusCheckRollup),
-        }))
-        resolve({ status: 'ready', pullRequests, checkedAt: Date.now() })
-      } catch (parseError) {
-        resolve({ status: 'error', message: parseError.message, pullRequests: [] })
-      }
-    })
+function reconcilePullRequestState(previousState, nextState, now = Date.now()) {
+  if (nextState.status !== 'ready') {
+    return {
+      ...nextState,
+      pullRequests: previousState.pullRequests || [],
+      transitions: previousState.transitions || [],
+    }
+  }
+
+  const previousByNumber = new Map((previousState.pullRequests || []).map((pullRequest) => [pullRequest.number, pullRequest]))
+  const retainedTransitions = (previousState.transitions || []).filter((transition) => transition.expiresAt > now)
+  const detectedTransitions = nextState.pullRequests.flatMap((pullRequest) => {
+    const previous = previousByNumber.get(pullRequest.number)
+    const watched = previous?.watched || getWatchedAuthor(previous?.authorLogin || previous?.author)
+    if (!watched || previous.state !== 'OPEN' || !['MERGED', 'CLOSED'].includes(pullRequest.state)) return []
+    return [{
+      ...previous,
+      ...pullRequest,
+      commits: pullRequest.commits?.length ? pullRequest.commits : previous.commits,
+      lifecycle: pullRequest.state === 'MERGED' ? 'merging' : 'closing',
+      detectedAt: now,
+      expiresAt: now + PR_TRANSITION_MS,
+    }]
   })
+  const transitions = [...detectedTransitions, ...retainedTransitions]
+    .filter((transition, index, all) => all.findIndex((candidate) => candidate.number === transition.number) === index)
+
+  return { ...nextState, transitions }
 }
 
 function checkMergeConflict(repoPath, baseRef, branchRef) {
@@ -295,6 +378,108 @@ function fetchRemote(repoPath) {
   })
 }
 
+function fetchPullRequestHeads(repoPath, pullRequestState) {
+  const current = git(repoPath, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { allowFailure: true }) || 'detached'
+  const base = findBaseBranch(repoPath, current)
+  const pullRequests = (pullRequestState.pullRequests || [])
+    .filter((pullRequest) => pullRequest.watched && pullRequest.state === 'OPEN' && pullRequest.baseRefName === base)
+    .slice(0, 12)
+  if (!pullRequests.length) return Promise.resolve({ status: 'none' })
+
+  const refspecs = pullRequests.map((pullRequest) => (
+    `+refs/pull/${pullRequest.number}/head:refs/branch-organism/pr/${pullRequest.number}`
+  ))
+  return new Promise((resolve) => {
+    execFile('git', ['-C', repoPath, 'fetch', 'origin', '--quiet', ...refspecs], {
+      encoding: 'utf8',
+      timeout: 30000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }, (error, _stdout, stderr) => {
+      resolve(error
+        ? { status: error.killed ? 'timeout' : 'error', message: stderr?.trim() || error.message }
+        : { status: 'ready' })
+    })
+  })
+}
+
+function resolvePullRequestRef(repoPath, pullRequest) {
+  const candidates = [
+    pullRequest.number ? `refs/branch-organism/pr/${pullRequest.number}` : null,
+    pullRequest.headRefName,
+    pullRequest.headRefName ? `origin/${pullRequest.headRefName}` : null,
+    pullRequest.headRefOid,
+  ].filter(Boolean)
+
+  for (const candidate of candidates) {
+    const sha = git(repoPath, ['rev-parse', '--verify', '--quiet', `${candidate}^{commit}`], { allowFailure: true })
+    if (sha) return candidate
+  }
+  return null
+}
+
+function distanceFromBaseHead(repoPath, comparisonBase, commitSha) {
+  if (!comparisonBase || !commitSha) return null
+  const commit = git(repoPath, ['rev-parse', '--verify', '--quiet', `${commitSha}^{commit}`], { allowFailure: true })
+  if (!commit) return null
+  const isAncestor = git(repoPath, ['merge-base', '--is-ancestor', commit, comparisonBase], { allowFailure: true }) !== null
+  if (!isAncestor) return null
+  const distance = git(repoPath, ['rev-list', '--first-parent', '--count', `${commit}..${comparisonBase}`], { allowFailure: true })
+  return distance === null ? null : Number(distance)
+}
+
+function relativeActivity(timestamp) {
+  const ageDays = Math.max(0, Math.floor((Date.now() / 1000 - timestamp) / 86400))
+  return { ageDays, relative: ageDays === 0 ? 'today' : `${ageDays} days ago` }
+}
+
+function readPullRequestBranch(repoPath, comparisonBase, current, pullRequest) {
+  const branchRef = resolvePullRequestRef(repoPath, pullRequest)
+  const counts = branchRef
+    ? git(repoPath, ['rev-list', '--left-right', '--count', `${comparisonBase}...${branchRef}`], { allowFailure: true })
+    : null
+  const [behind = 0, aheadFromGit = pullRequest.commits?.length || 0] = (counts || `0\t${pullRequest.commits?.length || 0}`).split(/\s+/).map(Number)
+  const mergeBase = branchRef
+    ? git(repoPath, ['merge-base', comparisonBase, branchRef], { allowFailure: true })
+    : null
+  const mergeBaseSha = mergeBase
+    ? git(repoPath, ['rev-parse', '--short', mergeBase], { allowFailure: true })
+    : pullRequest.baseRefOid?.slice(0, 7) || null
+  const distance = mergeBase
+    ? git(repoPath, ['rev-list', '--first-parent', '--count', `${mergeBase}..${comparisonBase}`], { allowFailure: true })
+    : null
+  const timestamp = Math.floor(Date.parse(pullRequest.updatedAt || '') / 1000) || Math.floor(Date.now() / 1000)
+  const activity = relativeActivity(timestamp)
+  const commits = pullRequest.commits?.length
+    ? pullRequest.commits
+    : (branchRef ? readCommits(repoPath, `${comparisonBase}..${branchRef}`, Math.min(aheadFromGit, 6)) : [])
+  const conflict = pullRequest.state === 'OPEN' && (
+    pullRequest.mergeable === 'CONFLICTING' || pullRequest.mergeStateStatus === 'DIRTY'
+  )
+
+  return {
+    name: pullRequest.headRefName,
+    sha: pullRequest.headSha || (branchRef ? git(repoPath, ['rev-parse', '--short', branchRef], { allowFailure: true }) : null),
+    timestamp,
+    subject: pullRequest.title,
+    ahead: Math.max(aheadFromGit, commits.length),
+    ...activity,
+    baseDistance: distance === null ? 0 : Number(distance),
+    behind,
+    commits,
+    conflict,
+    conflictSource: conflict ? 'github' : null,
+    isBase: false,
+    isCurrent: pullRequest.headRefName === current,
+    isPullRequest: true,
+    lifecycle: pullRequest.lifecycle || 'open',
+    mergeBaseSha,
+    mergeDistance: distanceFromBaseHead(repoPath, comparisonBase, pullRequest.mergeCommitSha),
+    merged: pullRequest.state === 'MERGED',
+    pullRequest,
+    stale: behind > 0,
+  }
+}
+
 function readBranchState(inputPath, pullRequestState = { status: 'idle', pullRequests: [] }) {
   const requestedPath = path.resolve(inputPath || process.cwd())
 
@@ -325,7 +510,8 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
         })
       : []
 
-    const pullRequests = pullRequestState.pullRequests || []
+    const pullRequests = (pullRequestState.pullRequests || []).map(normalizePullRequest)
+    const pullRequestTransitions = (pullRequestState.transitions || []).map(normalizePullRequest)
     const branches = selectVisibleBranches(allBranches, current, base).map((branch) => {
       const counts = comparisonBase && branch.name !== base
         ? git(repoPath, ['rev-list', '--left-right', '--count', `${comparisonBase}...${branch.name}`], { allowFailure: true })
@@ -373,6 +559,33 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       }
     })
 
+    const pullRequestBranches = [...pullRequests, ...pullRequestTransitions]
+      .filter((pullRequest) => (
+        pullRequest.watched
+        && pullRequest.baseRefName === base
+        && (pullRequest.state === 'OPEN' || pullRequest.lifecycle)
+      ))
+      .filter((pullRequest, index, all) => all.findIndex((candidate) => candidate.number === pullRequest.number) === index)
+      .map((pullRequest) => readPullRequestBranch(repoPath, comparisonBase, current, pullRequest))
+    const recentMerges = pullRequests
+      .filter((pullRequest) => (
+        pullRequest.watched
+        && pullRequest.baseRefName === base
+        && pullRequest.state === 'MERGED'
+        && Date.now() - Date.parse(pullRequest.mergedAt || '') <= RECENT_MERGE_MS
+      ))
+      .sort((left, right) => Date.parse(right.mergedAt || '') - Date.parse(left.mergedAt || ''))
+      .slice(0, 4)
+      .map((pullRequest) => ({
+        authorLogin: pullRequest.authorLogin,
+        authorName: pullRequest.authorName,
+        mergeDistance: distanceFromBaseHead(repoPath, comparisonBase, pullRequest.mergeCommitSha) ?? 0,
+        mergeSha: pullRequest.mergeCommitSha?.slice(0, 7) || null,
+        mergedAt: pullRequest.mergedAt,
+        number: pullRequest.number,
+        title: pullRequest.title,
+      }))
+
     return {
       status: branches.length ? 'ready' : 'empty',
       repoName: path.basename(repoPath),
@@ -387,6 +600,8 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
         checkedAt: pullRequestState.checkedAt,
       },
       branches,
+      pullRequestBranches,
+      recentMerges,
       totalBranches: allBranches.length,
       updatedAt: Date.now(),
     }
@@ -403,11 +618,15 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
 
 module.exports = {
   MAX_BRANCHES,
+  WATCHED_PR_AUTHORS,
+  fetchPullRequestHeads,
   fetchRemote,
   getRemoteWebUrl,
+  getWatchedAuthor,
   readGitHubPullRequests,
   readBranchState,
   readRepositoryFingerprint,
+  reconcilePullRequestState,
   resolveRepositoryPath,
   selectVisibleBranches,
   summarizeCheckRollup,
