@@ -1,13 +1,13 @@
 # Branch Organism
 
-A transparent, always-on-top Git tree. Its resting view reduces the repository to seven meaningful branches:
+A transparent, always-on-top Git tree. Its resting view keeps seven meaningful local branches, plus one open PR ghost for each watched teammate:
 
 - `origin/dev` descends from a free latest-history tip into an older-history root attached to the lower-right edge;
 - every branch grows leftward from its real merge-base ring, spaced while preserving ancestry order;
 - branch length follows commits ahead, with real commit nodes and a short head SHA;
 - current, upstream movement, and conflicts speak loudly while healthy or stale refs recede;
 - conflicts use a broken rust stem and a clean cross at the branch head;
-- open PRs from Raj (`xrehpicx`), Arnav (`AR13570`), Bishal (`ZenderGoD`), and Sammy (`ungaaaabungaaa`) replace their duplicate branch with a dashed ghost limb and real PR commit nodes;
+- open PRs from Raj (`xrehpicx`), Arnav (`AR13570`), Bishal (`ZenderGoD`), and Sammy (`ungaaaabungaaa`) use a separate four-limb budget, replacing only an exact duplicate branch with a dashed ghost limb and real PR commit nodes;
 - merged PR limbs contract into their recorded merge checkpoint; closed-unmerged limbs only fade, while recent merges leave quiet rings on the spine;
 - hovering a branch reveals its full name, PR state/title, CI rollup, ahead/behind counts, and last activity;
 - a checked-out ref at the base head collapses onto the same spine commit instead of inventing divergence;

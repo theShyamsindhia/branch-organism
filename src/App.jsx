@@ -178,19 +178,33 @@ function selectRestingBranches(branches, currentOnSpine, limit = 7) {
     .map((branch, sourceIndex) => ({
       branch,
       sourceIndex,
-      score: (branch.lifecycle && branch.lifecycle !== 'open' ? 12000 : 0)
-        + (branch.isCurrent ? 10000 : 0)
-        + (branch.isPullRequest ? 7000 : 0)
+      score: (branch.isCurrent ? 10000 : 0)
         + (branch.conflict ? 5000 : 0)
         + (branch.ahead > 0 ? 2000 + Math.min(branch.ahead, 100) * 10 : 0)
-        + (branch.pullRequest?.state === 'OPEN' ? 500 : 0)
-        - (branch.isPullRequest ? Math.min(branch.ageDays || 0, 180) * 140 : 0)
         - sourceIndex,
     }))
     .sort((left, right) => right.score - left.score)
     .slice(0, limit)
     .map(({ branch }) => branch)
     .sort((left, right) => (left.baseDistance || 0) - (right.baseDistance || 0))
+}
+
+function selectPullRequestBranches(branches, limit = 4) {
+  const authors = new Set()
+
+  return [...branches]
+    .sort((left, right) => (
+      Number(right.lifecycle !== 'open') - Number(left.lifecycle !== 'open')
+      || Number(right.conflict) - Number(left.conflict)
+      || (right.timestamp || 0) - (left.timestamp || 0)
+    ))
+    .filter((branch) => {
+      const author = branch.pullRequest?.authorLogin || branch.pullRequest?.authorName || branch.name
+      if (authors.has(author)) return false
+      authors.add(author)
+      return true
+    })
+    .slice(0, limit)
 }
 
 function branchGeometry(branch, index, spinePosition) {
@@ -318,7 +332,7 @@ function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosit
 
 function GitTree({ state, currentTick, upstreamMovement }) {
   const visibleBranches = state.branches.slice(0, 15)
-  const pullRequestBranches = state.pullRequestBranches || []
+  const pullRequestBranches = selectPullRequestBranches(state.pullRequestBranches || [])
   const pullRequestBranchNames = new Set(pullRequestBranches.map((branch) => branch.name))
   const recentMerges = state.recentMerges || []
   const base = state.remote?.base?.remoteRef || state.comparisonBase || state.base
@@ -335,10 +349,15 @@ function GitTree({ state, currentTick, upstreamMovement }) {
     && Boolean(state.remote?.base?.remoteRef)
     && baseAhead === 0
     && baseIncoming === 0
-  const branches = selectRestingBranches([
-    ...pullRequestBranches,
-    ...visibleBranches.filter((branch) => !pullRequestBranchNames.has(branch.name)),
-  ], currentOnSpine)
+  const localBranches = selectRestingBranches(
+    visibleBranches.filter((branch) => !pullRequestBranchNames.has(branch.name) || branch.isCurrent),
+    currentOnSpine,
+  )
+  const localBranchNames = new Set(localBranches.map((branch) => branch.name))
+  const branches = [
+    ...localBranches,
+    ...pullRequestBranches.filter((branch) => !localBranchNames.has(branch.name)),
+  ].sort((left, right) => (left.baseDistance || 0) - (right.baseDistance || 0))
   const branchDistances = branches
     .map((branch) => branch.baseDistance)
     .filter((distance) => Number.isFinite(distance) && distance >= 0)
