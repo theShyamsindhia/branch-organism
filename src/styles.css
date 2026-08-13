@@ -123,7 +123,6 @@ body {
 }
 
 .branch-stem,
-.branch-aura,
 .conflict-mark,
 .base-spine path {
   fill: none;
@@ -154,19 +153,6 @@ body {
   transition: stroke-width 120ms ease, opacity 120ms ease;
 }
 
-.branch-aura {
-  stroke: var(--branch-color);
-  stroke-width: 44;
-  opacity: 0.34;
-  filter: url(#organism-mist);
-}
-
-.branch-junction-aura {
-  fill: var(--branch-color);
-  opacity: 0.38;
-  filter: blur(12px);
-}
-
 .branch-junction-ring {
   fill: rgba(26, 31, 30, 0.92);
   stroke: var(--branch-color);
@@ -183,10 +169,6 @@ body {
 
 .tree-branch--current .branch-stem {
   stroke-width: 1.75;
-}
-
-.tree-branch--current .branch-aura {
-  opacity: 0.52;
 }
 
 .tree-branch--current .branch-tip {
@@ -299,13 +281,6 @@ body {
   color: rgba(226, 233, 229, 0.48);
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-}
-
-.base-spine .base-spine__aura {
-  stroke: rgba(223, 230, 226, 0.46);
-  stroke-width: 38;
-  opacity: 0.2;
-  filter: url(#organism-mist);
 }
 
 .base-spine .base-spine__underlay {

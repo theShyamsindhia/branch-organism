@@ -7,7 +7,6 @@ A transparent, always-on-top Git tree. Its resting view reduces the repository t
 - branch length follows commits ahead, with real commit nodes and a short head SHA;
 - current, upstream movement, and conflicts speak loudly while healthy or stale refs recede;
 - conflicts use a broken rust stem and a clean cross at the branch head;
-- a faint branch-colored aura separates the topology from the desktop without adding a window surface;
 - hovering a branch reveals its full name, PR state/title, CI rollup, ahead/behind counts, and last activity;
 - a checked-out ref at the base head collapses onto the same spine commit instead of inventing divergence;
 - the current marker briefly ticks every four seconds;

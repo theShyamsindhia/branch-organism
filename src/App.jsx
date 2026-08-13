@@ -247,8 +247,6 @@ function TreeBranch({ branch, currentTick, index, spinePosition }) {
       style={{ '--branch-color': color, '--branch-opacity': opacity }}
     >
       <path className="branch-hit-area" d={stem} />
-      <path className="branch-aura" d={stem} />
-      <circle className="branch-junction-aura" cx={startX} cy={startY} r="9" />
       <circle className="branch-junction-ring" cx={startX} cy={startY} r="5">
         <title>merge base · {branch.mergeBaseSha || 'unknown'}</title>
       </circle>
@@ -349,13 +347,6 @@ function GitTree({ state, currentTick, upstreamMovement }) {
 
   return (
     <svg className="git-tree" viewBox="0 0 520 760" role="img" aria-label={`Git tree for ${state.repoName}`}>
-      <defs>
-        <filter id="organism-mist" x="-45%" y="-80%" width="190%" height="260%" colorInterpolationFilters="sRGB">
-          <feTurbulence type="fractalNoise" baseFrequency="0.018 0.075" numOctaves="2" seed="17" result="noise" />
-          <feDisplacementMap in="SourceGraphic" in2="noise" scale="24" xChannelSelector="R" yChannelSelector="G" result="distorted" />
-          <feGaussianBlur in="distorted" stdDeviation="7" />
-        </filter>
-      </defs>
       <g className="tree-heading">
         <text x="30" y="34" className="repo-name">{state.repoName}</text>
         <text x="30" y="51" className="repo-current">on {trimName(state.current, 34)}</text>
@@ -363,7 +354,6 @@ function GitTree({ state, currentTick, upstreamMovement }) {
 
       <g className="organism-growth">
         <g className={`base-spine ${currentOnSpine ? 'base-spine--current' : ''} ${currentOnSpine && currentTick ? 'is-tick' : ''}`}>
-          <path className="base-spine__aura" d={SPINE_PATH} />
           <path className="base-spine__underlay" d={SPINE_PATH} />
           <path className="base-spine__line" d={SPINE_PATH} />
           {rememberedIncoming > 0 && (
