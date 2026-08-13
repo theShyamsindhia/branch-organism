@@ -91,6 +91,11 @@ function pointOnCubic([p0, p1, p2, p3], t) {
   }
 }
 
+function pointOnBranchCurve(curve, t) {
+  if (t <= 0.5) return pointOnCubic(curve[0], t * 2)
+  return pointOnCubic(curve[1], (t - 0.5) * 2)
+}
+
 function pointOnSpine(t) {
   const bounded = clamp(t, 0, 1)
   if (bounded <= 0.5) return pointOnCubic(SPINE_SEGMENTS[0], bounded * 2)
@@ -186,19 +191,35 @@ function branchGeometry(branch, index, spinePosition) {
   const tipX = clamp(startX - length, 42, 482)
   const tipY = clamp(startY - angledRise, 82, 684)
   const rise = tipY - startY
-  const bow = 10 + ((hash >>> 7) % 9)
+  const bow = 12 + ((hash >>> 7) % 11)
   const bowDirection = (hash >>> 2) % 2 === 0 ? -1 : 1
+  const departure = 6 + ((hash >>> 11) % 8)
+  const midpoint = {
+    x: startX - length * 0.5,
+    y: startY + rise * 0.46 + bowDirection * bow * 0.38,
+  }
   const curve = [
-    { x: startX, y: startY },
-    { x: startX - length * 0.08, y: startY + rise * 0.02 + bowDirection * bow * 0.45 },
-    { x: tipX + length * 0.38, y: tipY - rise * 0.18 + bowDirection * bow },
-    { x: tipX, y: tipY },
+    [
+      { x: startX, y: startY },
+      { x: startX - length * 0.08, y: startY + bowDirection * departure },
+      { x: startX - length * 0.3, y: startY + rise * 0.28 + bowDirection * bow },
+      midpoint,
+    ],
+    [
+      midpoint,
+      { x: startX - length * 0.7, y: startY + rise * 0.65 - bowDirection * bow * 0.52 },
+      { x: tipX + length * 0.1, y: tipY - bowDirection * departure * 0.32 },
+      { x: tipX, y: tipY },
+    ],
   ]
   const stem = [
     `M ${startX.toFixed(1)} ${startY.toFixed(1)}`,
-    `C ${curve[1].x.toFixed(1)} ${curve[1].y.toFixed(1)},`,
-    `${curve[2].x.toFixed(1)} ${curve[2].y.toFixed(1)},`,
-    `${tipX.toFixed(1)} ${tipY.toFixed(1)}`,
+    `C ${curve[0][1].x.toFixed(1)} ${curve[0][1].y.toFixed(1)},`,
+    `${curve[0][2].x.toFixed(1)} ${curve[0][2].y.toFixed(1)},`,
+    `${curve[0][3].x.toFixed(1)} ${curve[0][3].y.toFixed(1)}`,
+    `C ${curve[1][1].x.toFixed(1)} ${curve[1][1].y.toFixed(1)},`,
+    `${curve[1][2].x.toFixed(1)} ${curve[1][2].y.toFixed(1)},`,
+    `${curve[1][3].x.toFixed(1)} ${curve[1][3].y.toFixed(1)}`,
   ].join(' ')
 
   return { curve, hash, startX, startY, stem, tipX, tipY }
@@ -234,7 +255,7 @@ function TreeBranch({ branch, currentTick, index, spinePosition }) {
       <path className="branch-stem" d={stem} />
       {commits.map((commit, commitIndex) => {
         const ratio = commits.length === 1 ? 0.72 : 0.2 + (commitIndex / (commits.length - 1)) * 0.65
-        const point = pointOnCubic(curve, ratio)
+        const point = pointOnBranchCurve(curve, ratio)
         return (
           <circle className="branch-commit" cx={point.x} cy={point.y} key={`${commit.sha}-${commitIndex}`} r="1.45">
             <title>{commit.sha} · {commit.subject}</title>
