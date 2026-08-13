@@ -89,19 +89,15 @@ body {
   width: 100%;
   height: 100dvh;
   overflow: visible;
-  perspective: 1100px;
 }
 
 .git-tree text {
-  filter: drop-shadow(0 1px 0.8px rgba(248, 251, 249, 0.58));
+  filter: drop-shadow(0 0.5px 0.5px rgba(248, 251, 249, 0.24));
 }
 
 .organism-growth {
   transform-box: view-box;
   transform-origin: 520px 720px;
-  transform-style: preserve-3d;
-  animation: organism-swivel 48s ease-in-out infinite alternate;
-  will-change: transform;
 }
 
 .repo-name {
@@ -127,8 +123,7 @@ body {
 }
 
 .branch-stem,
-.merge-path,
-.merge-progress,
+.branch-aura,
 .conflict-mark,
 .base-spine path {
   fill: none;
@@ -145,10 +140,6 @@ body {
   opacity: 1;
 }
 
-.organism-growth:has(.tree-branch:hover) {
-  animation-play-state: paused;
-}
-
 .branch-hit-area {
   fill: none;
   stroke: transparent;
@@ -159,8 +150,28 @@ body {
 
 .branch-stem {
   stroke: var(--branch-color);
-  stroke-width: 1.35;
+  stroke-width: 1.15;
   transition: stroke-width 120ms ease, opacity 120ms ease;
+}
+
+.branch-aura {
+  stroke: var(--branch-color);
+  stroke-width: 44;
+  opacity: 0.34;
+  filter: url(#organism-mist);
+}
+
+.branch-junction-aura {
+  fill: var(--branch-color);
+  opacity: 0.38;
+  filter: blur(12px);
+}
+
+.branch-junction-ring {
+  fill: rgba(26, 31, 30, 0.92);
+  stroke: var(--branch-color);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
 }
 
 .branch-tip {
@@ -171,7 +182,11 @@ body {
 }
 
 .tree-branch--current .branch-stem {
-  stroke-width: 2.25;
+  stroke-width: 1.75;
+}
+
+.tree-branch--current .branch-aura {
+  opacity: 0.52;
 }
 
 .tree-branch--current .branch-tip {
@@ -219,32 +234,9 @@ body {
   stroke-width: 1.6;
 }
 
-.merge-path {
-  stroke: var(--branch-color);
-  stroke-width: 0.75;
-  stroke-dasharray: 2 5;
-  opacity: 0.16;
-}
-
-.merge-progress {
-  stroke: var(--branch-color);
-  stroke-width: 0.85;
-  stroke-dasharray: var(--merge-progress) 1;
-  opacity: 0.58;
-}
-
-.tree-branch--conflict .merge-progress {
-  stroke: #b66f65;
-}
-
-.merge-checkpoint {
-  fill: var(--branch-color);
-  opacity: 0.8;
-}
-
 .branch-label__name {
   fill: var(--branch-color);
-  font-size: 6.6px;
+  font-size: 6.4px;
   font-weight: 540;
 }
 
@@ -261,7 +253,7 @@ body {
 
 .current-label {
   fill: var(--branch-color);
-  font-size: 7.6px;
+  font-size: 6.8px;
 }
 
 .branch-hover-card {
@@ -309,14 +301,21 @@ body {
   -webkit-line-clamp: 2;
 }
 
+.base-spine .base-spine__aura {
+  stroke: rgba(223, 230, 226, 0.46);
+  stroke-width: 38;
+  opacity: 0.2;
+  filter: url(#organism-mist);
+}
+
 .base-spine .base-spine__underlay {
   stroke: rgba(16, 20, 19, 0.72);
-  stroke-width: 4.2;
+  stroke-width: 3.8;
 }
 
 .base-spine .base-spine__line {
   stroke: rgba(223, 230, 226, 0.78);
-  stroke-width: 1.45;
+  stroke-width: 1.25;
 }
 
 .upstream-ghost path {
@@ -374,7 +373,7 @@ body {
 }
 
 .base-spine--current .base-spine__line {
-  stroke-width: 2;
+  stroke-width: 1.5;
 }
 
 .base-spine .spine-current-ring {
@@ -407,8 +406,8 @@ body {
 }
 
 .is-docked-right .spine-current-label {
-  font-size: 9.5px;
-  font-weight: 620;
+  font-size: 7.2px;
+  font-weight: 560;
 }
 
 .is-docked-right .spine-current-dot {
@@ -438,18 +437,8 @@ body {
 }
 
 .base-label {
-  fill: rgba(42, 50, 48, 0.84);
-  font-size: 9px;
-}
-
-@keyframes organism-swivel {
-  from {
-    transform: perspective(1100px) rotateY(-8deg) rotateX(1.2deg) rotateZ(-0.65deg);
-  }
-
-  to {
-    transform: perspective(1100px) rotateY(8deg) rotateX(-1.2deg) rotateZ(0.65deg);
-  }
+  fill: rgba(223, 230, 226, 0.68);
+  font-size: 6.8px;
 }
 
 .tree-state {

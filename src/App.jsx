@@ -134,18 +134,6 @@ function rememberUpstreamMovement(state) {
   return movement
 }
 
-function mergeProgress(branch) {
-  if (branch.merged) return 1
-  if (branch.conflict) return 0.18
-
-  const state = branch.pullRequest?.mergeStateStatus
-  if (state === 'CLEAN') return 0.82
-  if (state === 'UNSTABLE') return 0.6
-  if (state === 'BLOCKED' || state === 'BEHIND') return 0.44
-  if (branch.pullRequest) return 0.36
-  return branch.behind === 0 ? 0.32 : 0.22
-}
-
 function ageOpacity(branch) {
   if (branch.isCurrent) return 1
   if (branch.conflict) return 0.86
@@ -169,24 +157,41 @@ function prSummary(branch) {
   return `PR #${branch.pullRequest.number} · ${state}`
 }
 
+function selectRestingBranches(branches, currentOnSpine, limit = 7) {
+  return branches
+    .filter((branch) => !branch.isBase && !(branch.isCurrent && currentOnSpine))
+    .map((branch, sourceIndex) => ({
+      branch,
+      sourceIndex,
+      score: (branch.isCurrent ? 10000 : 0)
+        + (branch.conflict ? 5000 : 0)
+        + (branch.ahead > 0 ? 2000 + Math.min(branch.ahead, 100) * 10 : 0)
+        + (branch.pullRequest?.state === 'OPEN' ? 500 : 0)
+        - sourceIndex,
+    }))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit)
+    .map(({ branch }) => branch)
+    .sort((left, right) => (left.baseDistance || 0) - (right.baseDistance || 0))
+}
+
 function branchGeometry(branch, index, spinePosition) {
   const hash = hashName(branch.name)
   const { x: startX, y: startY } = pointOnSpine(spinePosition)
-  const direction = startX > 442 ? -1 : (index % 2 === 0 ? -1 : 1)
-  const requestedLength = branch.ahead > 0 ? 54 + Math.sqrt(branch.ahead) * 22 : 16
-  const availableLength = direction < 0 ? startX - 48 : 500 - startX
-  const length = Math.max(branch.ahead > 0 ? 30 : 14, Math.min(requestedLength, availableLength))
-  const angleMagnitude = 12 + ((hash >>> 3) % 23)
-  const angleDirection = index % 2 === 0 ? -1 : 1
-  const angledRise = Math.tan(angleMagnitude * Math.PI / 180) * Math.min(length, 100)
-  const tipX = clamp(startX + direction * length, 38, 504)
-  const tipY = clamp(startY + angleDirection * angledRise, 84, 688)
+  const requestedLength = branch.ahead > 0 ? 92 + Math.sqrt(branch.ahead) * 24 : 68
+  const availableLength = startX - 54
+  const length = Math.max(62, Math.min(requestedLength, availableLength))
+  const angleMagnitude = 12 + ((hash >>> 3) % 10) + (index % 4) * 4
+  const angledRise = Math.tan(angleMagnitude * Math.PI / 180) * Math.min(length, 116)
+  const tipX = clamp(startX - length, 42, 482)
+  const tipY = clamp(startY - angledRise, 82, 684)
   const rise = tipY - startY
-  const checkpoint = pointOnSpine(spinePosition + Math.min(0.025 + branch.behind * 0.002, 0.065))
+  const bow = 10 + ((hash >>> 7) % 9)
+  const bowDirection = (hash >>> 2) % 2 === 0 ? -1 : 1
   const curve = [
     { x: startX, y: startY },
-    { x: startX + direction * length * 0.3, y: startY + rise * 0.3 },
-    { x: tipX - direction * length * 0.25, y: tipY - rise * 0.18 },
+    { x: startX - length * 0.08, y: startY + rise * 0.02 + bowDirection * bow * 0.45 },
+    { x: tipX + length * 0.38, y: tipY - rise * 0.18 + bowDirection * bow },
     { x: tipX, y: tipY },
   ]
   const stem = [
@@ -195,34 +200,25 @@ function branchGeometry(branch, index, spinePosition) {
     `${curve[2].x.toFixed(1)} ${curve[2].y.toFixed(1)},`,
     `${tipX.toFixed(1)} ${tipY.toFixed(1)}`,
   ].join(' ')
-  const ghost = [
-    `M ${tipX.toFixed(1)} ${tipY.toFixed(1)}`,
-    `C ${(tipX - direction * length * 0.22).toFixed(1)} ${(tipY + 9).toFixed(1)},`,
-    `${(checkpoint.x + direction * 22).toFixed(1)} ${(checkpoint.y + 4).toFixed(1)},`,
-    `${checkpoint.x.toFixed(1)} ${checkpoint.y.toFixed(1)}`,
-  ].join(' ')
 
-  return { checkpoint, curve, direction, ghost, hash, startX, startY, stem, tipX, tipY }
+  return { curve, hash, startX, startY, stem, tipX, tipY }
 }
 
 function TreeBranch({ branch, currentTick, index, spinePosition }) {
   const geometry = branchGeometry(branch, index, spinePosition)
-  const { checkpoint, curve, direction, ghost, hash, stem, tipX, tipY } = geometry
+  const { curve, hash, startX, startY, stem, tipX, tipY } = geometry
   const color = PALETTE[hash % PALETTE.length]
   const opacity = ageOpacity(branch)
-  const progress = mergeProgress(branch)
-  const commits = (branch.commits || []).slice(0, branch.isCurrent ? 4 : 3).reverse()
-  const statusLabel = branch.conflict
-    ? 'conflict'
-    : branch.isCurrent ? `${Math.round(progress * 100)}% merge` : null
-  const labelX = branch.isCurrent && direction < 0 ? tipX + 9 : tipX - 7
-  const labelAnchor = branch.isCurrent && direction < 0 ? 'start' : 'end'
+  const commits = (branch.commits || []).slice(0, 5).reverse()
+  const statusLabel = branch.conflict ? 'conflict' : null
+  const labelX = tipX - 8
+  const labelAnchor = 'end'
   const cardX = tipX < 250 ? clamp(tipX + 12, 12, 306) : clamp(tipX - 206, 12, 306)
   const cardY = clamp(tipY - 64, 12, 616)
   const currentLabel = branch.sha
-    ? `current · ${trimName(branch.name, 16)} · ${branch.sha}`
+    ? `current · ${trimName(branch.name, 15)} · ${branch.sha}`
     : `current · ${trimName(branch.name, 20)}`
-  const showRestingLabel = branch.isCurrent || branch.conflict || branch.ahead > 0
+  const restingLabel = `${trimName(branch.name, 15)} · ${branch.sha || 'unknown'}`
 
   return (
     <g
@@ -230,9 +226,11 @@ function TreeBranch({ branch, currentTick, index, spinePosition }) {
       style={{ '--branch-color': color, '--branch-opacity': opacity }}
     >
       <path className="branch-hit-area" d={stem} />
-      <path className="merge-path" d={ghost} pathLength="1" />
-      <path className="merge-progress" d={ghost} pathLength="1" style={{ '--merge-progress': progress }} />
-      <circle className="merge-checkpoint" cx={checkpoint.x} cy={checkpoint.y} r="2" />
+      <path className="branch-aura" d={stem} />
+      <circle className="branch-junction-aura" cx={startX} cy={startY} r="9" />
+      <circle className="branch-junction-ring" cx={startX} cy={startY} r="5">
+        <title>merge base · {branch.mergeBaseSha || 'unknown'}</title>
+      </circle>
       <path className="branch-stem" d={stem} />
       {commits.map((commit, commitIndex) => {
         const ratio = commits.length === 1 ? 0.72 : 0.2 + (commitIndex / (commits.length - 1)) * 0.65
@@ -250,11 +248,9 @@ function TreeBranch({ branch, currentTick, index, spinePosition }) {
       {branch.conflict && (
         <path className="conflict-mark" d={`M ${tipX - 5} ${tipY - 5} l 10 10 M ${tipX + 5} ${tipY - 5} l -10 10`} />
       )}
-      {showRestingLabel && (
-        <text className={branch.isCurrent ? 'current-label' : 'branch-label__name'} x={labelX} y={tipY - 3} textAnchor={labelAnchor}>
-          {branch.isCurrent ? currentLabel : trimName(branch.name, 17)}
-        </text>
-      )}
+      <text className={branch.isCurrent ? 'current-label' : 'branch-label__name'} x={labelX} y={tipY - 3} textAnchor={labelAnchor}>
+        {branch.isCurrent ? currentLabel : restingLabel}
+      </text>
       {statusLabel && (
         <text className="branch-label__progress" x={labelX} y={tipY + 8} textAnchor={labelAnchor}>{statusLabel}</text>
       )}
@@ -288,7 +284,7 @@ function GitTree({ state, currentTick, upstreamMovement }) {
     && Boolean(state.remote?.base?.remoteRef)
     && baseAhead === 0
     && baseIncoming === 0
-  const branches = visibleBranches.filter((branch) => !branch.isBase && !(branch.isCurrent && currentOnSpine))
+  const branches = selectRestingBranches(visibleBranches, currentOnSpine)
   const branchDistances = branches
     .map((branch) => branch.baseDistance)
     .filter((distance) => Number.isFinite(distance) && distance >= 0)
@@ -298,9 +294,9 @@ function GitTree({ state, currentTick, upstreamMovement }) {
     return 0.15 + ratio * 0.7
   }
   const basePointAt = (distance) => pointOnSpine(spinePositionAtDistance(distance))
-  const branchSpinePosition = (branch, index) => spinePositionAtDistance(
-    Number.isFinite(branch.baseDistance) ? branch.baseDistance : index + 1,
-  )
+  const branchSpinePosition = (_branch, index) => branches.length === 1
+    ? 0.42
+    : 0.18 + (index / (branches.length - 1)) * 0.62
   const exactBaseIndex = baseCommits.findIndex((commit) => commit.sha === baseBranch?.sha)
   const currentBaseDistance = baseIsCurrent
     ? (exactBaseIndex >= 0 ? exactBaseIndex : baseIncoming)
@@ -332,6 +328,13 @@ function GitTree({ state, currentTick, upstreamMovement }) {
 
   return (
     <svg className="git-tree" viewBox="0 0 520 760" role="img" aria-label={`Git tree for ${state.repoName}`}>
+      <defs>
+        <filter id="organism-mist" x="-45%" y="-80%" width="190%" height="260%" colorInterpolationFilters="sRGB">
+          <feTurbulence type="fractalNoise" baseFrequency="0.018 0.075" numOctaves="2" seed="17" result="noise" />
+          <feDisplacementMap in="SourceGraphic" in2="noise" scale="24" xChannelSelector="R" yChannelSelector="G" result="distorted" />
+          <feGaussianBlur in="distorted" stdDeviation="7" />
+        </filter>
+      </defs>
       <g className="tree-heading">
         <text x="30" y="34" className="repo-name">{state.repoName}</text>
         <text x="30" y="51" className="repo-current">on {trimName(state.current, 34)}</text>
@@ -339,6 +342,7 @@ function GitTree({ state, currentTick, upstreamMovement }) {
 
       <g className="organism-growth">
         <g className={`base-spine ${currentOnSpine ? 'base-spine--current' : ''} ${currentOnSpine && currentTick ? 'is-tick' : ''}`}>
+          <path className="base-spine__aura" d={SPINE_PATH} />
           <path className="base-spine__underlay" d={SPINE_PATH} />
           <path className="base-spine__line" d={SPINE_PATH} />
           {rememberedIncoming > 0 && (
@@ -358,14 +362,6 @@ function GitTree({ state, currentTick, upstreamMovement }) {
               </text>
             </g>
           )}
-          {branches.map((branch, index) => {
-            const point = pointOnSpine(branchSpinePosition(branch, index))
-            return (
-              <circle className="branch-junction" cx={point.x} cy={point.y} key={branch.name} r="1.35">
-                <title>merge base · {branch.mergeBaseSha || 'unknown'}</title>
-              </circle>
-            )
-          })}
           {baseCommits.map((commit, commitIndex) => {
             const { x, y } = basePointAt(commitIndex)
             return (
@@ -393,22 +389,13 @@ function GitTree({ state, currentTick, upstreamMovement }) {
                 y={currentBasePoint.y + 2.5}
               >
                 {baseFullySynced
-                  ? `current · ${trimName(state.current, 18)} = ${state.base} = ${base} · ${currentBranch?.sha || baseBranch?.sha || 'unknown'}`
+                  ? `current · ${trimName(state.current, 18)} · ${currentBranch?.sha || baseBranch?.sha || 'unknown'}`
                   : `current · ${trimName(state.current, 22)} · ${currentBranch?.sha || baseBranch?.sha || 'unknown'}`}
               </text>
             </g>
           )}
           <circle className="spine-root" cx="332" cy="62" r="3.3" />
-          {!baseFullySynced && (
-            <>
-              <text x="506" y="696" textAnchor="end" className="base-label">{base}</text>
-              <text x="506" y="710" textAnchor="end" className="base-state">
-                {baseIncoming > 0
-                  ? `${baseIncoming} newer upstream`
-                  : baseAhead > 0 ? `${baseAhead} local commits` : 'synced'}
-              </text>
-            </>
-          )}
+          <text x="344" y="57" textAnchor="start" className="base-label">{state.base} · {base} · {state.remote?.base?.remoteSha || baseBranch?.sha || 'unknown'}</text>
         </g>
 
         {branches.map((branch, index) => (
