@@ -139,14 +139,17 @@ function branchGeometry(branch, index, total) {
   const requestedLength = 76 + envelope * 46 + Math.min(branch.ahead * 1.25, 14)
   const availableLength = direction < 0 ? startX - 48 : 500 - startX
   const length = Math.max(30, Math.min(requestedLength, availableLength))
-  const rise = 8 + (hash % 18)
+  const angleMagnitude = 12 + ((hash >>> 3) % 23)
+  const angleDirection = index % 2 === 0 ? -1 : 1
+  const angledRise = Math.tan(angleMagnitude * Math.PI / 180) * Math.min(length, 100)
   const tipX = clamp(startX + direction * length, 38, 504)
-  const tipY = startY + rise
+  const tipY = clamp(startY + angleDirection * angledRise, 84, 688)
+  const rise = tipY - startY
   const checkpoint = pointOnSpine(spinePosition + Math.min(0.025 + branch.behind * 0.002, 0.065))
   const curve = [
     { x: startX, y: startY },
-    { x: startX + direction * length * 0.3, y: startY + rise * 0.12 },
-    { x: tipX - direction * length * 0.25, y: tipY - rise * 0.34 },
+    { x: startX + direction * length * 0.3, y: startY + rise * 0.3 },
+    { x: tipX - direction * length * 0.25, y: tipY - rise * 0.18 },
     { x: tipX, y: tipY },
   ]
   const stem = [

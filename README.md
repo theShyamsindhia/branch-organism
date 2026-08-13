@@ -28,6 +28,8 @@ Remote refs refresh once a minute. When the tracked base branch falls behind its
 
 The current marker is anchored to the checked-out commit and prints its short SHA. Branch ahead/behind counts stay in hover details so they cannot be mistaken for the current position.
 
+Branches leave the spine at deterministic organic angles, alternating their rise and fall so the topology stays open and readable.
+
 The menu-bar organism is the control surface. Click it once to show or hide the tree; right-click it to choose a repository, fetch immediately, open its GitHub page, or quit. The chosen folder is remembered on relaunch.
 
 ## Run it

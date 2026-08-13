@@ -1,7 +1,7 @@
 {
   "name": "branch-organism",
   "private": true,
-  "version": "0.14.1",
+  "version": "0.15.1",
   "description": "A minimal living Git branch overlay.",
   "main": "electron/main.cjs",
   "scripts": {
