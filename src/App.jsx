@@ -179,6 +179,9 @@ function TreeBranch({ branch, currentTick, index, total }) {
   const labelAnchor = branch.isCurrent && direction < 0 ? 'start' : 'end'
   const cardX = tipX < 250 ? clamp(tipX + 12, 12, 306) : clamp(tipX - 206, 12, 306)
   const cardY = clamp(tipY - 64, 12, 616)
+  const currentLabel = branch.sha
+    ? `current · ${trimName(branch.name, 16)} · ${branch.sha}`
+    : `current · ${trimName(branch.name, 20)}`
 
   return (
     <g
@@ -207,15 +210,10 @@ function TreeBranch({ branch, currentTick, index, total }) {
         <path className="conflict-mark" d={`M ${tipX - 5} ${tipY - 5} l 10 10 M ${tipX + 5} ${tipY - 5} l -10 10`} />
       )}
       <text className={branch.isCurrent ? 'current-label' : 'branch-label__name'} x={labelX} y={tipY - 3} textAnchor={labelAnchor}>
-        {branch.isCurrent ? `current · ${trimName(branch.name, 20)}` : trimName(branch.name, 17)}
+        {branch.isCurrent ? currentLabel : trimName(branch.name, 17)}
       </text>
       {statusLabel && (
         <text className="branch-label__progress" x={labelX} y={tipY + 8} textAnchor={labelAnchor}>{statusLabel}</text>
-      )}
-      {branch.behind > 0 && (
-        <text className="ghost-diff" x={checkpoint.x - direction * 5} y={checkpoint.y - 4} textAnchor={direction < 0 ? 'start' : 'end'}>
-          +{branch.behind}
-        </text>
       )}
       <foreignObject className="branch-hover-card" x={cardX} y={cardY} width="202" height="132">
         <div className="branch-hover-card__surface" xmlns="http://www.w3.org/1999/xhtml">
@@ -252,6 +250,28 @@ function GitTree({ state, currentTick }) {
   const fallbackCurrentIndex = clamp(baseIncoming, 0, Math.max(baseCommits.length - 1, 0))
   const currentBaseIndex = exactCurrentIndex >= 0 ? exactCurrentIndex : fallbackCurrentIndex
   const currentBasePoint = basePointAt(currentBaseIndex)
+  const remoteBasePoint = basePointAt(0)
+  const upstreamSide = currentBasePoint.x > 390 ? -1 : 1
+  const upstreamOffset = clamp(20 + Math.abs(currentBasePoint.y - remoteBasePoint.y) * 0.12, 22, 44)
+  const upstreamCurve = [
+    currentBasePoint,
+    {
+      x: currentBasePoint.x + upstreamSide * upstreamOffset,
+      y: currentBasePoint.y - Math.abs(currentBasePoint.y - remoteBasePoint.y) * 0.28,
+    },
+    {
+      x: remoteBasePoint.x + upstreamSide * upstreamOffset,
+      y: remoteBasePoint.y + Math.abs(currentBasePoint.y - remoteBasePoint.y) * 0.28,
+    },
+    remoteBasePoint,
+  ]
+  const upstreamGhostPath = [
+    `M ${currentBasePoint.x.toFixed(1)} ${currentBasePoint.y.toFixed(1)}`,
+    `C ${upstreamCurve[1].x.toFixed(1)} ${upstreamCurve[1].y.toFixed(1)},`,
+    `${upstreamCurve[2].x.toFixed(1)} ${upstreamCurve[2].y.toFixed(1)},`,
+    `${remoteBasePoint.x.toFixed(1)} ${remoteBasePoint.y.toFixed(1)}`,
+  ].join(' ')
+  const upstreamLabelPoint = pointOnCubic(upstreamCurve, 0.5)
 
   return (
     <svg className="git-tree" viewBox="0 0 520 760" role="img" aria-label={`Git tree for ${state.repoName}`}>
@@ -264,6 +284,23 @@ function GitTree({ state, currentTick }) {
         <g className={`base-spine ${baseIsCurrent ? 'base-spine--current' : ''} ${baseIsCurrent && currentTick ? 'is-tick' : ''}`}>
           <path className="base-spine__underlay" d={SPINE_PATH} />
           <path className="base-spine__line" d={SPINE_PATH} />
+          {baseIncoming > 0 && (
+            <g className="upstream-ghost">
+              <title>{base} moved {baseIncoming} {baseIncoming === 1 ? 'commit' : 'commits'} beyond {state.base}</title>
+              <path className="upstream-ghost__underlay" d={upstreamGhostPath} />
+              <path className="upstream-ghost__line" d={upstreamGhostPath} />
+              <circle className="upstream-ghost__checkpoint" cx={currentBasePoint.x} cy={currentBasePoint.y} r="2.4" />
+              <circle className="upstream-ghost__head" cx={remoteBasePoint.x} cy={remoteBasePoint.y} r="2.8" />
+              <text
+                className="upstream-ghost__label"
+                textAnchor="middle"
+                x={upstreamLabelPoint.x}
+                y={upstreamLabelPoint.y - 5}
+              >
+                +{baseIncoming}
+              </text>
+            </g>
+          )}
           {branches.map((_branch, index) => {
             const position = branches.length > 1 ? index / (branches.length - 1) : 0.5
             const point = pointOnSpine(0.1 + position * 0.82)
@@ -279,6 +316,7 @@ function GitTree({ state, currentTick }) {
           })}
           {baseIsCurrent && (
             <g className={`spine-current-position ${baseFullySynced ? 'is-synced' : ''}`}>
+              <title>Current: {state.base} at {baseBranch?.sha || 'unknown commit'}</title>
               <circle className="spine-current-ring" cx={currentBasePoint.x} cy={currentBasePoint.y} r="7" />
               <circle className="spine-current-dot" cx={currentBasePoint.x} cy={currentBasePoint.y} r="2.5" />
               <line
@@ -294,7 +332,9 @@ function GitTree({ state, currentTick }) {
                 x={currentBasePoint.x + (baseFullySynced ? -13 : 13)}
                 y={currentBasePoint.y + 2.5}
               >
-                {baseFullySynced ? `${state.base} = ${base} · current` : `${state.base} · current`}
+                {baseFullySynced
+                  ? `current · ${state.base} = ${base} · ${baseBranch?.sha || 'unknown'}`
+                  : `current · ${state.base} · ${baseBranch?.sha || 'unknown'}`}
               </text>
             </g>
           )}

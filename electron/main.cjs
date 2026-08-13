@@ -6,11 +6,12 @@ const { createRefreshQueue } = require('./refresh-queue.cjs')
 const { isNearRightEdge, settleWindowBounds } = require('./window-layout.cjs')
 
 const LOCAL_REFRESH_MS = 5000
-const REMOTE_REFRESH_MS = 5 * 60 * 1000
+const REMOTE_REFRESH_MS = 60 * 1000
 const DEFAULT_REPO_PATH = process.cwd()
 
 let overlayWindow
 let tray
+let trayMenu
 let localRefreshTimer
 let remoteRefreshTimer
 let branchState
@@ -231,7 +232,7 @@ function updateTrayMenu() {
 
   const remoteUrl = branchState?.remote?.webUrl
   const remoteLabel = branchState?.remote?.provider === 'github' ? 'Open on GitHub' : 'Open Remote Repository'
-  const menu = Menu.buildFromTemplate([
+  trayMenu = Menu.buildFromTemplate([
     { label: 'Branch Organism', enabled: false },
     { label: branchState?.repoName || 'No repository', enabled: false },
     { label: getTrayStatusLabel(), enabled: false },
@@ -274,8 +275,7 @@ function updateTrayMenu() {
     { label: 'Quit Branch Organism', click: () => app.quit() },
   ])
 
-  tray.setContextMenu(menu)
-  tray.setToolTip(`Branch Organism · ${branchState?.repoName || 'choose a repository'}`)
+  tray.setToolTip(`Branch Organism · Click to ${overlayWindow?.isVisible() ? 'hide' : 'show'} · Right-click for menu`)
   if (process.platform === 'darwin') tray.setTitle(getIncomingCount() ? ` ${getIncomingCount()}` : '')
 }
 
@@ -445,6 +445,9 @@ if (!hasSingleInstanceLock) {
   })
   createOverlay()
   tray = new Tray(createTrayIcon())
+  tray.setIgnoreDoubleClickEvents(true)
+  tray.on('click', toggleOverlay)
+  tray.on('right-click', () => tray.popUpContextMenu(trayMenu))
   updateTrayMenu()
 
   refreshBranchState({ fetch: true })

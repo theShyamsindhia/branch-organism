@@ -242,10 +242,6 @@ body {
   opacity: 0.8;
 }
 
-.ghost-diff {
-  font-family: 'Geist Mono', ui-monospace, monospace;
-}
-
 .branch-label__name {
   fill: var(--branch-color);
   font-size: 6.6px;
@@ -253,8 +249,7 @@ body {
 }
 
 .branch-label__progress,
-.current-label,
-.ghost-diff {
+.current-label {
   fill: rgba(225, 232, 228, 0.54);
   font-size: 6.2px;
   font-family: 'Geist Mono', ui-monospace, monospace;
@@ -267,10 +262,6 @@ body {
 .current-label {
   fill: var(--branch-color);
   font-size: 7.6px;
-}
-
-.ghost-diff {
-  fill: rgba(225, 232, 228, 0.44);
 }
 
 .branch-hover-card {
@@ -326,6 +317,45 @@ body {
 .base-spine .base-spine__line {
   stroke: rgba(223, 230, 226, 0.78);
   stroke-width: 1.45;
+}
+
+.upstream-ghost path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.upstream-ghost__underlay {
+  stroke: rgba(16, 20, 19, 0.58);
+  stroke-width: 3.8;
+}
+
+.upstream-ghost__line {
+  stroke: rgba(126, 166, 171, 0.82);
+  stroke-width: 1.1;
+  stroke-dasharray: 2 4;
+}
+
+.upstream-ghost__checkpoint {
+  fill: rgba(25, 31, 30, 0.9) !important;
+  stroke: rgba(126, 166, 171, 0.62);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.upstream-ghost__head {
+  fill: rgba(126, 166, 171, 0.9) !important;
+  stroke: rgba(235, 241, 238, 0.52);
+  stroke-width: 0.9;
+  vector-effect: non-scaling-stroke;
+}
+
+.upstream-ghost__label {
+  fill: rgba(126, 166, 171, 0.82);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 6.4px;
+  letter-spacing: 0.015em;
 }
 
 .base-spine circle {

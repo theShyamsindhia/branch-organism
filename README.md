@@ -24,7 +24,11 @@ A transparent, always-on-top Git tree. It shows the 15 most recently active loca
 
 Git topology snapshots run in a background utility process, so large repositories cannot block the tray or window movement. Unchanged refs reuse the last snapshot, and remote refresh requests are queued rather than dropped.
 
-The menu-bar organism is the control surface. Use it to choose a repository, fetch immediately, open its GitHub page, show or hide the overlay, or quit. The chosen folder is remembered on relaunch.
+Remote refs refresh once a minute. When the tracked base branch falls behind its remote, a faint dashed ghost curves from the local checkpoint to the newer upstream head. It disappears once the two refs are synced.
+
+The current marker is anchored to the checked-out commit and prints its short SHA. Branch ahead/behind counts stay in hover details so they cannot be mistaken for the current position.
+
+The menu-bar organism is the control surface. Click it once to show or hide the tree; right-click it to choose a repository, fetch immediately, open its GitHub page, or quit. The chosen folder is remembered on relaunch.
 
 ## Run it
 
