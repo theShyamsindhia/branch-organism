@@ -89,19 +89,15 @@ body {
   width: 100%;
   height: 100dvh;
   overflow: visible;
-  perspective: 1100px;
 }
 
 .git-tree text {
-  filter: drop-shadow(0 1px 0.8px rgba(248, 251, 249, 0.58));
+  filter: drop-shadow(0 0.5px 0.5px rgba(248, 251, 249, 0.24));
 }
 
 .organism-growth {
   transform-box: view-box;
   transform-origin: 520px 720px;
-  transform-style: preserve-3d;
-  animation: organism-swivel 48s ease-in-out infinite alternate;
-  will-change: transform;
 }
 
 .repo-name {
@@ -127,8 +123,6 @@ body {
 }
 
 .branch-stem,
-.merge-path,
-.merge-progress,
 .conflict-mark,
 .base-spine path {
   fill: none;
@@ -145,10 +139,6 @@ body {
   opacity: 1;
 }
 
-.organism-growth:has(.tree-branch:hover) {
-  animation-play-state: paused;
-}
-
 .branch-hit-area {
   fill: none;
   stroke: transparent;
@@ -159,8 +149,15 @@ body {
 
 .branch-stem {
   stroke: var(--branch-color);
-  stroke-width: 1.35;
+  stroke-width: 1.15;
   transition: stroke-width 120ms ease, opacity 120ms ease;
+}
+
+.branch-junction-ring {
+  fill: rgba(26, 31, 30, 0.92);
+  stroke: var(--branch-color);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
 }
 
 .branch-tip {
@@ -171,11 +168,34 @@ body {
 }
 
 .tree-branch--current .branch-stem {
-  stroke-width: 2.25;
+  stroke-width: 1.75;
 }
 
 .tree-branch--current .branch-tip {
   stroke: rgba(235, 241, 238, 0.78);
+}
+
+.tree-branch--pull-request .branch-stem {
+  stroke-width: 1.05;
+  stroke-dasharray: 2.5 3.8;
+  opacity: 0.82;
+}
+
+.tree-branch--pull-request .branch-commit {
+  fill: rgba(24, 29, 28, 0.36);
+}
+
+.tree-branch--draft {
+  opacity: calc(var(--branch-opacity) * 0.56);
+}
+
+.tree-branch--merging {
+  transform-box: view-box;
+  animation: pr-merge-collapse 1400ms cubic-bezier(0.65, 0, 0.2, 1) forwards;
+}
+
+.tree-branch--closing {
+  animation: pr-close 720ms ease-out forwards;
 }
 
 .branch-commit {
@@ -219,42 +239,14 @@ body {
   stroke-width: 1.6;
 }
 
-.merge-path {
-  stroke: var(--branch-color);
-  stroke-width: 0.75;
-  stroke-dasharray: 2 5;
-  opacity: 0.16;
-}
-
-.merge-progress {
-  stroke: var(--branch-color);
-  stroke-width: 0.85;
-  stroke-dasharray: var(--merge-progress) 1;
-  opacity: 0.58;
-}
-
-.tree-branch--conflict .merge-progress {
-  stroke: #b66f65;
-}
-
-.merge-checkpoint {
-  fill: var(--branch-color);
-  opacity: 0.8;
-}
-
-.ghost-diff {
-  font-family: 'Geist Mono', ui-monospace, monospace;
-}
-
 .branch-label__name {
   fill: var(--branch-color);
-  font-size: 6.6px;
+  font-size: 6.4px;
   font-weight: 540;
 }
 
 .branch-label__progress,
-.current-label,
-.ghost-diff {
+.current-label {
   fill: rgba(225, 232, 228, 0.54);
   font-size: 6.2px;
   font-family: 'Geist Mono', ui-monospace, monospace;
@@ -266,11 +258,7 @@ body {
 
 .current-label {
   fill: var(--branch-color);
-  font-size: 7.6px;
-}
-
-.ghost-diff {
-  fill: rgba(225, 232, 228, 0.44);
+  font-size: 6.8px;
 }
 
 .branch-hover-card {
@@ -320,12 +308,51 @@ body {
 
 .base-spine .base-spine__underlay {
   stroke: rgba(16, 20, 19, 0.72);
-  stroke-width: 4.2;
+  stroke-width: 3.8;
 }
 
 .base-spine .base-spine__line {
   stroke: rgba(223, 230, 226, 0.78);
-  stroke-width: 1.45;
+  stroke-width: 1.25;
+}
+
+.upstream-ghost path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.upstream-ghost__underlay {
+  stroke: rgba(16, 20, 19, 0.58);
+  stroke-width: 3.8;
+}
+
+.upstream-ghost__line {
+  stroke: rgba(126, 166, 171, 0.82);
+  stroke-width: 1.1;
+  stroke-dasharray: 2 4;
+}
+
+.upstream-ghost__checkpoint {
+  fill: rgba(25, 31, 30, 0.9) !important;
+  stroke: rgba(126, 166, 171, 0.62);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.upstream-ghost__head {
+  fill: rgba(126, 166, 171, 0.9) !important;
+  stroke: rgba(235, 241, 238, 0.52);
+  stroke-width: 0.9;
+  vector-effect: non-scaling-stroke;
+}
+
+.upstream-ghost__label {
+  fill: rgba(126, 166, 171, 0.82);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 6.4px;
+  letter-spacing: 0.015em;
 }
 
 .base-spine circle {
@@ -343,8 +370,23 @@ body {
   vector-effect: non-scaling-stroke;
 }
 
+.recent-merge__ring {
+  fill: rgba(24, 29, 28, 0.9) !important;
+  stroke: var(--branch-color);
+  stroke-width: 1.25;
+  opacity: 0.68;
+  vector-effect: non-scaling-stroke;
+}
+
+.recent-merge__label {
+  fill: var(--branch-color);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 5.8px;
+  opacity: 0.48;
+}
+
 .base-spine--current .base-spine__line {
-  stroke-width: 2;
+  stroke-width: 1.5;
 }
 
 .base-spine .spine-current-ring {
@@ -377,8 +419,8 @@ body {
 }
 
 .is-docked-right .spine-current-label {
-  font-size: 9.5px;
-  font-weight: 620;
+  font-size: 7.2px;
+  font-weight: 560;
 }
 
 .is-docked-right .spine-current-dot {
@@ -408,18 +450,8 @@ body {
 }
 
 .base-label {
-  fill: rgba(42, 50, 48, 0.84);
-  font-size: 9px;
-}
-
-@keyframes organism-swivel {
-  from {
-    transform: perspective(1100px) rotateY(-8deg) rotateX(1.2deg) rotateZ(-0.65deg);
-  }
-
-  to {
-    transform: perspective(1100px) rotateY(8deg) rotateX(-1.2deg) rotateZ(0.65deg);
-  }
+  fill: rgba(223, 230, 226, 0.68);
+  font-size: 6.8px;
 }
 
 .tree-state {
@@ -451,6 +483,32 @@ body {
   line-height: 1.5;
 }
 
+@keyframes pr-merge-collapse {
+  from {
+    opacity: var(--branch-opacity);
+    transform: translate(0, 0) scaleX(1);
+  }
+
+  72% {
+    opacity: 0.72;
+  }
+
+  to {
+    opacity: 0;
+    transform: translate(var(--merge-shift-x), var(--merge-shift-y)) scaleX(0.015);
+  }
+}
+
+@keyframes pr-close {
+  from {
+    opacity: var(--branch-opacity);
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .organism-growth {
     animation: none;
@@ -460,5 +518,10 @@ body {
   .current-ring,
   .spine-current-ring {
     transition: none;
+  }
+
+  .tree-branch--merging,
+  .tree-branch--closing {
+    animation-duration: 1ms;
   }
 }

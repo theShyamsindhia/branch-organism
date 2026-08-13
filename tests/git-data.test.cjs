@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const test = require('node:test')
-const { fetchRemote, getRemoteWebUrl, readBranchState, readRepositoryFingerprint, resolveRepositoryPath, selectVisibleBranches, summarizeCheckRollup } = require('../electron/git-data.cjs')
+const { fetchRemote, getRemoteWebUrl, getWatchedAuthor, readBranchState, readRepositoryFingerprint, reconcilePullRequestState, resolveRepositoryPath, selectVisibleBranches, summarizeCheckRollup } = require('../electron/git-data.cjs')
 const { createRefreshQueue } = require('../electron/refresh-queue.cjs')
 const { clampWindowX, clampWindowY, isNearRightEdge, settleWindowBounds } = require('../electron/window-layout.cjs')
 
@@ -94,6 +94,8 @@ test('marks a branch behind dev as stale', (context) => {
   assert.equal(feature.ahead, 1)
   assert.equal(feature.commits.length, 1)
   assert.equal(feature.commits[0].subject, 'feature')
+  assert.equal(feature.baseDistance, 1)
+  assert.equal(feature.mergeBaseSha, run(repoPath, ['rev-parse', '--short', 'HEAD~1']))
   assert.equal(state.baseCommits[0].subject, 'dev moved')
   assert.equal(feature.stale, true)
   assert.ok(readRepositoryFingerprint(repoPath))
@@ -129,6 +131,36 @@ test('summarizes GitHub check rollups for branch hover details', () => {
   ]), { total: 4, passed: 2, failed: 1, pending: 1 })
 })
 
+test('maps the monitored PR authors to their display names', () => {
+  assert.equal(getWatchedAuthor('xrehpicx'), 'Raj')
+  assert.equal(getWatchedAuthor('AR13570'), 'Arnav')
+  assert.equal(getWatchedAuthor('ZenderGoD'), 'Bishal')
+  assert.equal(getWatchedAuthor('ungaaaabungaaa'), 'Sammy')
+  assert.equal(getWatchedAuthor('someone-else'), null)
+})
+
+test('detects watched PR merge and close transitions', () => {
+  const previous = {
+    status: 'ready',
+    pullRequests: [
+      { number: 81, authorLogin: 'xrehpicx', state: 'OPEN', watched: true },
+      { number: 82, authorLogin: 'AR13570', state: 'OPEN', watched: true },
+    ],
+  }
+  const next = {
+    status: 'ready',
+    checkedAt: 2000,
+    pullRequests: [
+      { number: 81, authorLogin: 'xrehpicx', state: 'MERGED', watched: true },
+      { number: 82, authorLogin: 'AR13570', state: 'CLOSED', watched: true },
+    ],
+  }
+  const reconciled = reconcilePullRequestState(previous, next, 1000)
+
+  assert.equal(reconciled.transitions.find((transition) => transition.number === 81).lifecycle, 'merging')
+  assert.equal(reconciled.transitions.find((transition) => transition.number === 82).lifecycle, 'closing')
+})
+
 test('resolves a parent folder with one primary worktree', (context) => {
   const parentPath = fs.mkdtempSync(path.join(os.tmpdir(), 'branch-organism-parent-'))
   const repoPath = path.join(parentPath, 'studio')
@@ -158,19 +190,27 @@ test('uses GitHub mergeability to mark PR conflicts', (context) => {
   const state = readBranchState(repoPath, {
     status: 'ready',
     pullRequests: [{
+      author: { login: 'xrehpicx' },
       baseRefName: 'dev',
+      commits: [{ oid: run(repoPath, ['rev-parse', 'feature/conflict']), messageHeadline: 'feature' }],
       headRefName: 'feature/conflict',
+      headRefOid: run(repoPath, ['rev-parse', 'feature/conflict']),
       mergeable: 'CONFLICTING',
       mergeStateStatus: 'DIRTY',
       number: 82,
       state: 'OPEN',
+      updatedAt: new Date().toISOString(),
     }],
   })
   const branch = state.branches.find((candidate) => candidate.name === 'feature/conflict')
+  const pullRequestBranch = state.pullRequestBranches.find((candidate) => candidate.name === 'feature/conflict')
 
   assert.equal(branch.conflict, true)
   assert.equal(branch.conflictSource, 'github')
   assert.equal(branch.pullRequest.number, 82)
+  assert.equal(pullRequestBranch.isPullRequest, true)
+  assert.equal(pullRequestBranch.pullRequest.authorName, 'Raj')
+  assert.equal(pullRequestBranch.commits[0].subject, 'feature')
 })
 
 test('fetches and describes incoming upstream changes', async (context) => {
@@ -206,6 +246,7 @@ test('fetches and describes incoming upstream changes', async (context) => {
   assert.equal(state.remote.status, 'ready')
   assert.equal(state.remote.focus.remoteRef, 'origin/dev')
   assert.equal(state.remote.focus.behind, 1)
+  assert.equal(state.remote.base.remoteSha, run(repoPath, ['rev-parse', '--short', 'origin/dev']))
   assert.equal(state.remote.focus.incomingCommits[0].subject, 'extend upstream shape')
   assert.deepEqual(state.remote.focus.changedFiles[0], {
     status: 'A',
