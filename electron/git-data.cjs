@@ -115,14 +115,28 @@ function findGitHubCli() {
 }
 
 function summarizeCheckRollup(checks = []) {
-  return checks.reduce((summary, check) => {
-    const state = check.conclusion || check.state || check.status
+  const items = checks.map((check, index) => {
+    const state = String(check.conclusion || check.state || check.status || 'PENDING').toUpperCase()
+    const status = ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(state)
+      ? 'passed'
+      : ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(state)
+        ? 'failed'
+        : 'pending'
+
+    return {
+      name: check.name || check.context || `Check ${index + 1}`,
+      status,
+      workflow: check.workflowName || null,
+    }
+  })
+
+  return items.reduce((summary, check) => {
     summary.total += 1
-    if (['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(state)) summary.passed += 1
-    else if (['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(state)) summary.failed += 1
+    if (check.status === 'passed') summary.passed += 1
+    else if (check.status === 'failed') summary.failed += 1
     else summary.pending += 1
     return summary
-  }, { total: 0, passed: 0, failed: 0, pending: 0 })
+  }, { total: 0, passed: 0, failed: 0, pending: 0, items })
 }
 
 function getWatchedAuthor(author) {
@@ -134,7 +148,7 @@ function normalizePullRequest({ statusCheckRollup, ...pullRequest }) {
   const authorLogin = typeof pullRequest.author === 'string'
     ? pullRequest.author
     : pullRequest.author?.login || null
-  const authorName = getWatchedAuthor(authorLogin)
+  const authorName = getWatchedAuthor(authorLogin) || authorLogin
   const mergeCommitSha = typeof pullRequest.mergeCommit === 'string'
     ? pullRequest.mergeCommit
     : pullRequest.mergeCommit?.oid || null
@@ -143,16 +157,19 @@ function normalizePullRequest({ statusCheckRollup, ...pullRequest }) {
     subject: commit.subject || commit.messageHeadline || 'commit',
     timestamp: commit.timestamp || Math.floor(Date.parse(commit.committedDate || '') / 1000) || 0,
   }))
+  const checks = pullRequest.checks
+    ? { ...pullRequest.checks, items: pullRequest.checks.items || [] }
+    : summarizeCheckRollup(statusCheckRollup)
 
   return {
     ...pullRequest,
     authorLogin,
     authorName,
-    checks: pullRequest.checks || summarizeCheckRollup(statusCheckRollup),
+    checks,
     commits,
     headSha: pullRequest.headSha || pullRequest.headRefOid?.slice(0, 7) || commits.at(-1)?.sha || null,
     mergeCommitSha,
-    watched: Boolean(authorName),
+    watched: Boolean(authorLogin),
   }
 }
 
@@ -559,6 +576,7 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       }
     })
 
+    const localBranchNames = new Set(allBranches.map((branch) => branch.name))
     const pullRequestBranches = [...pullRequests, ...pullRequestTransitions]
       .filter((pullRequest) => (
         pullRequest.watched
@@ -566,7 +584,10 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
         && (pullRequest.state === 'OPEN' || pullRequest.lifecycle)
       ))
       .filter((pullRequest, index, all) => all.findIndex((candidate) => candidate.number === pullRequest.number) === index)
-      .map((pullRequest) => readPullRequestBranch(repoPath, comparisonBase, current, pullRequest))
+      .map((pullRequest) => ({
+        ...readPullRequestBranch(repoPath, comparisonBase, current, pullRequest),
+        hasLocalBranch: localBranchNames.has(pullRequest.headRefName),
+      }))
     const recentMerges = pullRequests
       .filter((pullRequest) => (
         pullRequest.watched
@@ -579,6 +600,7 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       .map((pullRequest) => ({
         authorLogin: pullRequest.authorLogin,
         authorName: pullRequest.authorName,
+        checks: pullRequest.checks,
         mergeDistance: distanceFromBaseHead(repoPath, comparisonBase, pullRequest.mergeCommitSha) ?? 0,
         mergeSha: pullRequest.mergeCommitSha?.slice(0, 7) || null,
         mergedAt: pullRequest.mergedAt,

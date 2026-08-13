@@ -133,11 +133,22 @@ test('normalizes GitHub remotes into browser URLs', () => {
 
 test('summarizes GitHub check rollups for branch hover details', () => {
   assert.deepEqual(summarizeCheckRollup([
-    { status: 'COMPLETED', conclusion: 'SUCCESS' },
-    { status: 'COMPLETED', conclusion: 'FAILURE' },
-    { status: 'IN_PROGRESS', conclusion: '' },
-    { state: 'SUCCESS' },
-  ]), { total: 4, passed: 2, failed: 1, pending: 1 })
+    { name: 'Build', status: 'COMPLETED', conclusion: 'SUCCESS', workflowName: 'CI' },
+    { name: 'Lint', status: 'COMPLETED', conclusion: 'FAILURE' },
+    { name: 'Preview', status: 'IN_PROGRESS', conclusion: '' },
+    { context: 'deploy', state: 'SUCCESS' },
+  ]), {
+    total: 4,
+    passed: 2,
+    failed: 1,
+    pending: 1,
+    items: [
+      { name: 'Build', status: 'passed', workflow: 'CI' },
+      { name: 'Lint', status: 'failed', workflow: null },
+      { name: 'Preview', status: 'pending', workflow: null },
+      { name: 'deploy', status: 'passed', workflow: null },
+    ],
+  })
 })
 
 test('maps the monitored PR authors to their display names', () => {
@@ -146,6 +157,36 @@ test('maps the monitored PR authors to their display names', () => {
   assert.equal(getWatchedAuthor('ZenderGoD'), 'Bishal')
   assert.equal(getWatchedAuthor('ungaaaabungaaa'), 'Sammy')
   assert.equal(getWatchedAuthor('someone-else'), null)
+})
+
+test('shows PRs from GitHub authors outside the original team', (context) => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'branch-organism-generic-pr-'))
+  context.after(() => fs.rmSync(repoPath, { recursive: true, force: true }))
+
+  run(repoPath, ['init', '-b', 'main'])
+  run(repoPath, ['config', 'user.name', 'Branch Test'])
+  run(repoPath, ['config', 'user.email', 'branch@test.invalid'])
+  fs.writeFileSync(path.join(repoPath, 'seed.txt'), 'seed\n')
+  run(repoPath, ['add', 'seed.txt'])
+  run(repoPath, ['commit', '-m', 'seed'])
+  const sha = run(repoPath, ['rev-parse', 'HEAD'])
+
+  const state = readBranchState(repoPath, {
+    status: 'ready',
+    pullRequests: [{
+      author: { login: 'octofriend' },
+      baseRefName: 'main',
+      commits: [{ oid: sha, messageHeadline: 'shared branch' }],
+      headRefName: 'friend/shared-branch',
+      headRefOid: sha,
+      mergeable: 'MERGEABLE',
+      number: 7,
+      state: 'OPEN',
+      updatedAt: new Date().toISOString(),
+    }],
+  })
+
+  assert.equal(state.pullRequestBranches[0].pullRequest.authorName, 'octofriend')
 })
 
 test('detects watched PR merge and close transitions', () => {
@@ -218,6 +259,7 @@ test('uses GitHub mergeability to mark PR conflicts', (context) => {
   assert.equal(branch.conflictSource, 'github')
   assert.equal(branch.pullRequest.number, 82)
   assert.equal(pullRequestBranch.isPullRequest, true)
+  assert.equal(pullRequestBranch.hasLocalBranch, true)
   assert.equal(pullRequestBranch.pullRequest.authorName, 'Raj')
   assert.equal(pullRequestBranch.commits[0].subject, 'feature')
 })

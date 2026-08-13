@@ -176,7 +176,10 @@ body {
 }
 
 .tree-branch--pull-request .branch-stem {
-  stroke-width: 1.05;
+  stroke-width: 1.45;
+}
+
+.tree-branch--pr-ghost .branch-stem {
   stroke-dasharray: 2.5 3.8;
   opacity: 0.82;
 }
@@ -220,6 +223,26 @@ body {
   transition: opacity 100ms ease, transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+.check-ring {
+  pointer-events: none;
+}
+
+.check-ring circle {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.check-ring__track {
+  stroke: rgba(29, 34, 33, 0.88);
+  stroke-width: 2.8;
+}
+
+.check-ring__segment {
+  stroke: var(--check-color);
+  stroke-linecap: butt;
+  stroke-width: 1.7;
+}
+
 .tree-branch.is-tick .branch-stem {
   stroke-width: 3.4;
 }
@@ -232,6 +255,15 @@ body {
 .tree-branch--conflict .branch-stem {
   stroke: #b66f65;
   stroke-dasharray: 9 5 2 5;
+}
+
+.tree-branch--pr-open.tree-branch--conflict .branch-stem {
+  stroke: var(--branch-color);
+}
+
+.tree-branch--merging.tree-branch--conflict .branch-stem {
+  stroke: var(--branch-color);
+  stroke-dasharray: none;
 }
 
 .conflict-mark {
@@ -306,6 +338,38 @@ body {
   -webkit-line-clamp: 2;
 }
 
+.branch-hover-card__checks {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0;
+  padding: 5px 0;
+  border-top: 1px solid rgba(230, 237, 233, 0.08);
+  border-bottom: 1px solid rgba(230, 237, 233, 0.08);
+}
+
+.branch-hover-card__check {
+  display: grid;
+  grid-template-columns: 5px minmax(0, 1fr);
+  gap: 5px;
+  align-items: baseline;
+  overflow-wrap: anywhere;
+}
+
+.branch-hover-card__check-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #858c89;
+}
+
+.branch-hover-card__check-dot--passed {
+  background: #7fa884;
+}
+
+.branch-hover-card__check-dot--failed {
+  background: #c66f5d;
+}
+
 .base-spine .base-spine__underlay {
   stroke: rgba(16, 20, 19, 0.72);
   stroke-width: 3.8;
@@ -357,6 +421,10 @@ body {
 
 .base-spine circle {
   fill: rgba(223, 230, 226, 0.66);
+}
+
+.base-spine .check-ring circle {
+  fill: none;
 }
 
 .base-spine .branch-junction {

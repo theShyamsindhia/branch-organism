@@ -7,6 +7,13 @@ const PR_AUTHOR_COLORS = {
   Raj: '#6e9bab',
   Sammy: '#ad786f',
 }
+const PR_OPEN_COLOR = '#e0c95a'
+const MERGED_COLOR = '#8f78a8'
+const CHECK_COLORS = {
+  passed: '#7fa884',
+  failed: '#c66f5d',
+  pending: '#858c89',
+}
 const SPINE_SEGMENTS = [
   [{ x: 332, y: 62 }, { x: 400, y: 104 }, { x: 350, y: 240 }, { x: 398, y: 330 }],
   [{ x: 398, y: 330 }, { x: 452, y: 430 }, { x: 414, y: 610 }, { x: 520, y: 720 }],
@@ -66,7 +73,21 @@ const demoState = {
       number: 2300 + index,
       mergeStateStatus,
       state: 'OPEN',
-      checks: { total: 7, passed: mergeStateStatus === 'DIRTY' ? 4 : 6, failed: mergeStateStatus === 'DIRTY' ? 2 : 0, pending: 1 },
+      checks: {
+        total: 7,
+        passed: mergeStateStatus === 'DIRTY' ? 4 : 6,
+        failed: mergeStateStatus === 'DIRTY' ? 2 : 0,
+        pending: 1,
+        items: [
+          { name: 'Build', status: 'passed', workflow: 'CI' },
+          { name: 'Typecheck', status: 'passed', workflow: 'CI' },
+          { name: 'Unit tests', status: 'passed', workflow: 'CI' },
+          { name: 'Preview', status: 'pending', workflow: 'Deploy' },
+          { name: 'Lint', status: mergeStateStatus === 'DIRTY' ? 'failed' : 'passed', workflow: 'CI' },
+          { name: 'Integration tests', status: mergeStateStatus === 'DIRTY' ? 'failed' : 'passed', workflow: 'CI' },
+          { name: 'Accessibility', status: 'passed', workflow: 'Quality' },
+        ],
+      },
     } : null,
   })),
 }
@@ -147,6 +168,7 @@ function rememberUpstreamMovement(state) {
 
 function ageOpacity(branch) {
   if (branch.isCurrent) return 1
+  if (branch.pullRequest?.state === 'OPEN' || branch.lifecycle === 'merging') return 1
   if (branch.conflict) return 0.86
   return clamp(0.92 - Math.log2((branch.ageDays || 0) + 1) * 0.11, 0.26, 0.92)
 }
@@ -172,6 +194,43 @@ function prSummary(branch) {
   return `${branch.pullRequest.isDraft ? 'draft PR' : 'PR'} #${branch.pullRequest.number} · ${state}`
 }
 
+function checkProgressLabel(branch) {
+  const checks = branch.pullRequest?.checks
+  if (!checks?.total) return null
+  if (checks.failed) return `${checks.failed} ${checks.failed === 1 ? 'check' : 'checks'} failed`
+  if (checks.pending) return `${checks.passed}/${checks.total} checks`
+  return `${checks.total}/${checks.total} checks`
+}
+
+function CheckRing({ checks, color, x, y }) {
+  if (!checks?.items?.length) return null
+
+  const radius = 8.2
+  const circumference = 2 * Math.PI * radius
+  const gap = Math.min(2, circumference / (checks.items.length * 3))
+  const segment = circumference / checks.items.length - gap
+
+  return (
+    <g className="check-ring" transform={`rotate(-90 ${x} ${y})`}>
+      <circle className="check-ring__track" cx={x} cy={y} r={radius} />
+      {checks.items.map((check, index) => (
+        <circle
+          className={`check-ring__segment check-ring__segment--${check.status}`}
+          cx={x}
+          cy={y}
+          key={`${check.name}-${index}`}
+          r={radius}
+          strokeDasharray={`${segment} ${circumference - segment}`}
+          strokeDashoffset={-(index * circumference / checks.items.length)}
+          style={{ '--check-color': color || CHECK_COLORS[check.status] || CHECK_COLORS.pending }}
+        >
+          <title>{check.name} · {check.status}</title>
+        </circle>
+      ))}
+    </g>
+  )
+}
+
 function selectRestingBranches(branches, currentOnSpine, limit = 7) {
   return branches
     .filter((branch) => !branch.isBase && !(branch.isCurrent && currentOnSpine))
@@ -195,8 +254,8 @@ function selectPullRequestBranches(branches, limit = 4) {
   return [...branches]
     .sort((left, right) => (
       Number(right.lifecycle !== 'open') - Number(left.lifecycle !== 'open')
-      || Number(right.conflict) - Number(left.conflict)
       || (right.timestamp || 0) - (left.timestamp || 0)
+      || Number(right.conflict) - Number(left.conflict)
     ))
     .filter((branch) => {
       const author = branch.pullRequest?.authorLogin || branch.pullRequest?.authorName || branch.name
@@ -256,20 +315,33 @@ function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosit
   const geometry = branchGeometry(branch, index, spinePosition)
   const { curve, hash, startX, startY, stem, tipX, tipY } = geometry
   const mergePoint = pointOnSpine(mergeSpinePosition ?? spinePosition)
-  const color = PR_AUTHOR_COLORS[branch.pullRequest?.authorName] || PALETTE[hash % PALETTE.length]
+  const isOpenPullRequest = branch.pullRequest?.state === 'OPEN' && branch.lifecycle !== 'closing'
+  const isMergedBranch = branch.lifecycle === 'merging' || branch.merged
+  const isGhostPullRequest = branch.isPullRequest && !branch.hasLocalBranch
+  const color = isMergedBranch
+    ? MERGED_COLOR
+    : isOpenPullRequest
+      ? PR_OPEN_COLOR
+      : PR_AUTHOR_COLORS[branch.pullRequest?.authorName] || PALETTE[hash % PALETTE.length]
   const opacity = ageOpacity(branch)
   const commits = (branch.commits || []).slice(0, 5).reverse()
+  const checks = branch.pullRequest?.checks
+  const checkItems = (checks?.items || []).slice(0, 8)
+  const checkLabel = checkProgressLabel(branch)
   const statusLabel = branch.conflict
     ? 'conflict'
-    : branch.lifecycle === 'merging'
+    : isMergedBranch
       ? 'merged'
       : branch.lifecycle === 'closing'
         ? 'closed'
-        : branch.pullRequest?.isDraft ? 'draft' : null
+        : branch.pullRequest?.isDraft
+          ? checkLabel ? `draft · ${checkLabel}` : 'draft'
+          : isOpenPullRequest ? checkLabel : null
   const labelX = tipX - 8
   const labelAnchor = 'end'
-  const cardX = tipX < 250 ? clamp(tipX + 12, 12, 306) : clamp(tipX - 206, 12, 306)
-  const cardY = clamp(tipY - 64, 12, 616)
+  const cardHeight = checkItems.length ? 150 + checkItems.length * 13 : 132
+  const cardX = tipX < 250 ? clamp(tipX + 12, 12, 288) : clamp(tipX - 224, 12, 288)
+  const cardY = clamp(tipY - 64, 12, 748 - cardHeight)
   const currentLabel = branch.sha
     ? `current · ${trimName(branch.name, 15)} · ${branch.sha}`
     : `current · ${trimName(branch.name, 20)}`
@@ -279,7 +351,7 @@ function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosit
 
   return (
     <g
-      className={`tree-branch ${branch.isCurrent ? 'tree-branch--current' : ''} ${branch.isPullRequest ? 'tree-branch--pull-request' : ''} ${branch.pullRequest?.isDraft ? 'tree-branch--draft' : ''} ${branch.lifecycle === 'merging' ? 'tree-branch--merging' : ''} ${branch.lifecycle === 'closing' ? 'tree-branch--closing' : ''} ${branch.conflict ? 'tree-branch--conflict' : ''} ${currentTick && branch.isCurrent ? 'is-tick' : ''}`}
+      className={`tree-branch ${branch.isCurrent ? 'tree-branch--current' : ''} ${branch.pullRequest ? 'tree-branch--pull-request' : ''} ${isOpenPullRequest ? 'tree-branch--pr-open' : ''} ${isMergedBranch ? 'tree-branch--merged' : ''} ${isGhostPullRequest ? 'tree-branch--pr-ghost' : ''} ${branch.pullRequest?.isDraft ? 'tree-branch--draft' : ''} ${branch.lifecycle === 'merging' ? 'tree-branch--merging' : ''} ${branch.lifecycle === 'closing' ? 'tree-branch--closing' : ''} ${branch.conflict ? 'tree-branch--conflict' : ''} ${currentTick && branch.isCurrent ? 'is-tick' : ''}`}
       style={{
         '--branch-color': color,
         '--branch-opacity': opacity,
@@ -305,7 +377,10 @@ function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosit
       <circle className="branch-tip" cx={tipX} cy={tipY} r={branch.isCurrent ? 4.5 : 3}>
         <title>{branch.isPullRequest ? `${branch.pullRequest.authorName} · PR #${branch.pullRequest.number}` : branch.sha || branch.name} · branch head</title>
       </circle>
-      {branch.isCurrent && <circle className="current-ring" cx={tipX} cy={tipY} r="9" />}
+      {(isOpenPullRequest || isMergedBranch) && (
+        <CheckRing checks={checks} color={isMergedBranch ? MERGED_COLOR : undefined} x={tipX} y={tipY} />
+      )}
+      {branch.isCurrent && <circle className="current-ring" cx={tipX} cy={tipY} r={isOpenPullRequest ? 11.5 : 9} />}
       {branch.conflict && (
         <path className="conflict-mark" d={`M ${tipX - 5} ${tipY - 5} l 10 10 M ${tipX + 5} ${tipY - 5} l -10 10`} />
       )}
@@ -315,13 +390,28 @@ function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosit
       {statusLabel && (
         <text className="branch-label__progress" x={labelX} y={tipY + 8} textAnchor={labelAnchor}>{statusLabel}</text>
       )}
-      <foreignObject className="branch-hover-card" x={cardX} y={cardY} width="202" height="132">
+      <foreignObject className="branch-hover-card" x={cardX} y={cardY} width="220" height={cardHeight}>
         <div className="branch-hover-card__surface" xmlns="http://www.w3.org/1999/xhtml">
           <strong>{branch.name}</strong>
-          {branch.pullRequest?.authorName && <span>{branch.pullRequest.authorName} · @{branch.pullRequest.authorLogin}</span>}
+          {branch.pullRequest?.authorName && (
+            <span>{branch.pullRequest.authorName === branch.pullRequest.authorLogin
+              ? `@${branch.pullRequest.authorLogin}`
+              : `${branch.pullRequest.authorName} · @${branch.pullRequest.authorLogin}`}</span>
+          )}
           <span>{prSummary(branch)}</span>
           {branch.pullRequest?.title && <span className="branch-hover-card__pr-title">{branch.pullRequest.title}</span>}
           <span>{checkSummary(branch.pullRequest?.checks)}</span>
+          {checkItems.length > 0 && (
+            <span className="branch-hover-card__checks">
+              {checkItems.map((check, checkIndex) => (
+                <span className="branch-hover-card__check" key={`${check.name}-${checkIndex}`}>
+                  <span className={`branch-hover-card__check-dot branch-hover-card__check-dot--${check.status}`} />
+                  <span>{check.workflow ? `${check.workflow} · ` : ''}{check.name}</span>
+                </span>
+              ))}
+              {(checks?.items?.length || 0) > checkItems.length && <span>+{checks.items.length - checkItems.length} more</span>}
+            </span>
+          )}
           <span>{branch.ahead} ahead · {branch.behind} behind</span>
           <span>last activity · {branch.relative || 'unknown'}</span>
         </div>
@@ -440,14 +530,14 @@ function GitTree({ state, currentTick, upstreamMovement }) {
           })}
           {recentMerges.map((merge, mergeIndex) => {
             const point = basePointAt(merge.mergeDistance)
-            const color = PR_AUTHOR_COLORS[merge.authorName] || PALETTE[mergeIndex % PALETTE.length]
             return (
-              <g className="recent-merge" key={`${merge.number}-${merge.mergeSha}`} style={{ '--branch-color': color }}>
+              <g className="recent-merge" key={`${merge.number}-${merge.mergeSha}`} style={{ '--branch-color': MERGED_COLOR }}>
                 <circle className="recent-merge__ring" cx={point.x} cy={point.y} r="4.2">
                   <title>{merge.authorName} merged PR #{merge.number} · {merge.title}</title>
                 </circle>
+                <CheckRing checks={merge.checks} color={MERGED_COLOR} x={point.x} y={point.y} />
                 <text className="recent-merge__label" textAnchor="end" x={point.x - 7} y={point.y - 5 - (mergeIndex % 2) * 6}>
-                  {merge.authorName} · #{merge.number}
+                  merged · {merge.authorName} #{merge.number}
                 </text>
               </g>
             )

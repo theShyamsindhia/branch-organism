@@ -7,6 +7,8 @@ const path = require('node:path')
 const outputPath = process.argv.find((argument) => argument.startsWith('--output='))?.slice('--output='.length)
   || path.join(process.cwd(), 'work', 'electron-smoke.json')
 let smokeRepoPath
+let smokeDevSha
+let smokeFeatureSha
 
 function runGit(args) {
   return execFileSync('git', ['-C', smokeRepoPath, ...args], { encoding: 'utf8' }).trim()
@@ -20,10 +22,12 @@ function createSmokeRepository() {
   fs.writeFileSync(path.join(smokeRepoPath, 'seed.txt'), 'seed\n')
   runGit(['add', 'seed.txt'])
   runGit(['commit', '-m', 'seed'])
+  smokeDevSha = runGit(['rev-parse', 'HEAD'])
   runGit(['switch', '-c', 'feature/smoke'])
   fs.writeFileSync(path.join(smokeRepoPath, 'feature.txt'), 'feature\n')
   runGit(['add', 'feature.txt'])
   runGit(['commit', '-m', 'feature'])
+  smokeFeatureSha = runGit(['rev-parse', 'HEAD'])
 }
 
 app.whenReady().then(async () => {
@@ -43,7 +47,43 @@ app.whenReady().then(async () => {
     })
     worker.postMessage({
       id: 1,
-      pullRequestState: { status: 'idle', pullRequests: [] },
+      pullRequestState: {
+        status: 'ready',
+        pullRequests: [{
+          author: { login: 'xrehpicx' },
+          baseRefName: 'dev',
+          baseRefOid: smokeDevSha,
+          commits: [{ oid: smokeFeatureSha, messageHeadline: 'feature' }],
+          headRefName: 'feature/smoke',
+          headRefOid: smokeFeatureSha,
+          mergeable: 'MERGEABLE',
+          mergeStateStatus: 'UNSTABLE',
+          number: 42,
+          state: 'OPEN',
+          statusCheckRollup: [
+            { name: 'Build', conclusion: 'SUCCESS', status: 'COMPLETED' },
+            { name: 'Lint', conclusion: 'FAILURE', status: 'COMPLETED' },
+            { name: 'Preview', status: 'IN_PROGRESS' },
+          ],
+          title: 'Smoke-test PR status',
+          updatedAt: new Date().toISOString(),
+        }, {
+          author: { login: 'AR13570' },
+          baseRefName: 'dev',
+          headRefName: 'merged/smoke',
+          headRefOid: smokeDevSha,
+          mergeCommit: { oid: smokeDevSha },
+          mergedAt: new Date().toISOString(),
+          number: 41,
+          state: 'MERGED',
+          statusCheckRollup: [
+            { name: 'Build', conclusion: 'SUCCESS', status: 'COMPLETED' },
+            { name: 'Preview', conclusion: 'SUCCESS', status: 'COMPLETED' },
+          ],
+          title: 'Merged smoke-test PR',
+          updatedAt: new Date().toISOString(),
+        }],
+      },
       repoPath: smokeRepoPath,
     })
   })
@@ -82,9 +122,13 @@ app.whenReady().then(async () => {
     tree: Boolean(document.querySelector('.git-tree')),
     gripper: Boolean(document.querySelector('.tree-gripper')),
     overlayApi: Boolean(window.gitOverlay),
+    openPullRequest: Boolean(document.querySelector('.tree-branch--pr-open:not(.tree-branch--pr-ghost)')),
+    checkSegments: document.querySelectorAll('.check-ring__segment').length,
+    mergedCheckSegments: document.querySelectorAll('.recent-merge .check-ring__segment').length,
+    mergedLabel: document.querySelector('.recent-merge__label')?.textContent,
   })`)
 
-  if (!state.tree || !state.gripper || !state.overlayApi || errors.length || timerDelayMs > 200) {
+  if (!state.tree || !state.gripper || !state.overlayApi || !state.openPullRequest || state.checkSegments !== 5 || state.mergedCheckSegments !== 2 || state.mergedLabel !== 'merged · Arnav #41' || errors.length || timerDelayMs > 200) {
     throw new Error(`Electron smoke check failed: ${JSON.stringify({ ...state, errors, timerDelayMs })}`)
   }
 

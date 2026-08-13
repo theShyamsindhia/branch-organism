@@ -8,8 +8,6 @@ const { isNearRightEdge, isPointInsideWindowRegion, settleWindowBounds } = requi
 const LOCAL_REFRESH_MS = 5000
 const REMOTE_REFRESH_MS = 60 * 1000
 const GRIPPER_HIT_TEST_MS = 50
-const DEFAULT_REPO_PATH = process.cwd()
-
 let overlayWindow
 let tray
 let trayMenu
@@ -71,8 +69,9 @@ function saveRepoPath(nextRepoPath) {
   saveSettings({ repoPath: nextRepoPath })
 }
 
-function getInitialRepoPath() {
-  return path.resolve(getCommandLineRepoPath() || readSettings().repoPath || DEFAULT_REPO_PATH)
+function getConfiguredRepoPath() {
+  const configuredPath = getCommandLineRepoPath() || readSettings().repoPath
+  return configuredPath ? path.resolve(configuredPath) : null
 }
 
 function rejectWorkerRequests(error) {
@@ -203,6 +202,10 @@ function updateGripperInteractivity() {
 
 function toggleOverlay() {
   if (!overlayWindow) return
+  if (branchState?.status !== 'ready') {
+    chooseRepository()
+    return
+  }
   if (overlayWindow.isVisible()) overlayWindow.hide()
   else overlayWindow.showInactive()
   updateTrayMenu()
@@ -263,6 +266,7 @@ function updateTrayMenu() {
       click: () => refreshBranchState({ fetch: true }),
     },
     { label: remoteLabel, visible: Boolean(remoteUrl), click: () => shell.openExternal(remoteUrl) },
+    { label: 'Setup Help…', click: showSetupHelp },
     {
       label: 'Dock Tree to Right Edge',
       type: 'checkbox',
@@ -299,15 +303,45 @@ function updateTrayMenu() {
 }
 
 async function chooseRepository() {
-  const result = await dialog.showOpenDialog({
+  const wasVisible = Boolean(overlayWindow?.isVisible())
+  if (process.platform === 'darwin') app.focus({ steal: true })
+  overlayWindow?.setFocusable(true)
+  overlayWindow?.show()
+  overlayWindow?.focus()
+
+  const result = await dialog.showOpenDialog(overlayWindow, {
     title: 'Choose a Git repository',
     buttonLabel: 'Track Repository',
     defaultPath: branchState?.status === 'ready' ? branchState.repoPath : undefined,
     properties: ['openDirectory'],
   })
-  if (result.canceled || !result.filePaths[0]) return
+  overlayWindow?.setFocusable(false)
+  if (result.canceled || !result.filePaths[0]) {
+    if (!wasVisible) overlayWindow?.hide()
+    return
+  }
 
-  await trackRepository(result.filePaths[0], { showError: true })
+  const tracked = await trackRepository(result.filePaths[0], { showError: true })
+  if (!tracked && !wasVisible) overlayWindow?.hide()
+}
+
+async function showSetupHelp() {
+  const result = await dialog.showMessageBox({
+    type: 'info',
+    title: 'Branch Organism Setup',
+    message: 'Choose any folder inside a local Git repository.',
+    detail: [
+      'Git is required. macOS will offer to install the Command Line Tools if Git is missing.',
+      '',
+      'GitHub CLI is optional, but it enables pull requests, checks, conflicts, and merge activity. Install it, then run: gh auth login',
+      '',
+      'Your chosen repository and tree position are remembered on this Mac.',
+    ].join('\n'),
+    buttons: ['Done', 'GitHub CLI Website'],
+    defaultId: 0,
+    cancelId: 0,
+  })
+  if (result.response === 1) shell.openExternal('https://cli.github.com/')
 }
 
 async function trackRepository(candidatePath, { showError = false } = {}) {
@@ -421,7 +455,7 @@ function createOverlay() {
 
   overlayWindow.once('ready-to-show', () => {
     publishLayoutState()
-    overlayWindow.showInactive()
+    if (branchState?.status === 'ready') overlayWindow.showInactive()
   })
   overlayWindow.on('close', (event) => {
     if (!isQuitting) {
@@ -439,15 +473,19 @@ if (!hasSingleInstanceLock) {
   app.setName('Branch Organism')
   if (process.platform === 'darwin') app.dock.hide()
 
-  repoPath = getInitialRepoPath()
-  try {
-    branchState = { ...await readBranchStateAsync(repoPath, pullRequestState), fetch: { status: 'idle' } }
-  } catch (error) {
-    branchState = { status: 'error', repoPath, message: 'Unable to inspect this repository.', detail: error.message }
-  }
-  if (branchState.status === 'ready') {
-    repoPath = branchState.repoPath
-    saveRepoPath(repoPath)
+  repoPath = getConfiguredRepoPath()
+  if (repoPath) {
+    try {
+      branchState = { ...await readBranchStateAsync(repoPath, pullRequestState), fetch: { status: 'idle' } }
+    } catch (error) {
+      branchState = { status: 'error', repoPath, message: 'Unable to inspect this repository.', detail: error.message }
+    }
+    if (branchState.status === 'ready') {
+      repoPath = branchState.repoPath
+      saveRepoPath(repoPath)
+    }
+  } else {
+    branchState = { status: 'error', message: 'Choose a Git repository to begin.' }
   }
   refreshQueue = createRefreshQueue(runRefresh)
   ipcMain.handle('git-state:get', () => branchState)
@@ -467,7 +505,8 @@ if (!hasSingleInstanceLock) {
   tray.on('right-click', () => tray.popUpContextMenu(trayMenu))
   updateTrayMenu()
 
-  refreshBranchState({ fetch: true })
+  if (branchState.status === 'ready') refreshBranchState({ fetch: true })
+  else setImmediate(chooseRepository)
   localRefreshTimer = setInterval(() => refreshBranchState(), LOCAL_REFRESH_MS)
   remoteRefreshTimer = setInterval(() => refreshBranchState({ fetch: true }), REMOTE_REFRESH_MS)
 
