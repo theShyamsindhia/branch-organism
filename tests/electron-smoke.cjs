@@ -1,0 +1,102 @@
+const { app, BrowserWindow, ipcMain, utilityProcess } = require('electron')
+const { execFileSync } = require('node:child_process')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+
+const outputPath = process.argv.find((argument) => argument.startsWith('--output='))?.slice('--output='.length)
+  || path.join(process.cwd(), 'work', 'electron-smoke.json')
+let smokeRepoPath
+
+function runGit(args) {
+  return execFileSync('git', ['-C', smokeRepoPath, ...args], { encoding: 'utf8' }).trim()
+}
+
+function createSmokeRepository() {
+  smokeRepoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'branch-organism-electron-'))
+  runGit(['init', '-b', 'dev'])
+  runGit(['config', 'user.name', 'Branch Organism Smoke'])
+  runGit(['config', 'user.email', 'smoke@branch-organism.invalid'])
+  fs.writeFileSync(path.join(smokeRepoPath, 'seed.txt'), 'seed\n')
+  runGit(['add', 'seed.txt'])
+  runGit(['commit', '-m', 'seed'])
+  runGit(['switch', '-c', 'feature/smoke'])
+  fs.writeFileSync(path.join(smokeRepoPath, 'feature.txt'), 'feature\n')
+  runGit(['add', 'feature.txt'])
+  runGit(['commit', '-m', 'feature'])
+}
+
+app.whenReady().then(async () => {
+  createSmokeRepository()
+  const worker = utilityProcess.fork(path.join(process.cwd(), 'electron', 'git-worker.cjs'), [], {
+    serviceName: 'Branch Organism Smoke Git Snapshot',
+    stdio: 'ignore',
+  })
+  const startedAt = Date.now()
+  const timerDelay = new Promise((resolve) => setTimeout(() => resolve(Date.now() - startedAt), 20))
+  const branchState = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Git worker smoke test timed out.')), 30000)
+    worker.once('message', ({ error, state }) => {
+      clearTimeout(timeout)
+      if (error) reject(new Error(error))
+      else resolve(state)
+    })
+    worker.postMessage({
+      id: 1,
+      pullRequestState: { status: 'idle', pullRequests: [] },
+      repoPath: smokeRepoPath,
+    })
+  })
+  const [stateFromWorker, timerDelayMs] = await Promise.all([branchState, timerDelay])
+
+  ipcMain.handle('git-state:get', () => ({ ...stateFromWorker, fetch: { status: 'idle' } }))
+  ipcMain.handle('layout-state:get', () => ({ docked: true }))
+  const window = new BrowserWindow({
+    width: 540,
+    height: 820,
+    show: false,
+    webPreferences: {
+      preload: path.join(process.cwd(), 'electron', 'preload.cjs'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  const errors = []
+
+  window.webContents.on('console-message', (event) => {
+    if (event.level >= 2) errors.push(event.message)
+  })
+  await window.loadFile(path.join(process.cwd(), 'dist', 'index.html'))
+  await window.webContents.executeJavaScript(`new Promise((resolve, reject) => {
+    const deadline = Date.now() + 5000
+    const inspect = () => {
+      if (document.querySelector('.git-tree')) resolve()
+      else if (Date.now() >= deadline) reject(new Error('Tree did not render.'))
+      else setTimeout(inspect, 40)
+    }
+    inspect()
+  })`)
+  const state = await window.webContents.executeJavaScript(`({
+    title: document.title,
+    tree: Boolean(document.querySelector('.git-tree')),
+    gripper: Boolean(document.querySelector('.tree-gripper')),
+    overlayApi: Boolean(window.gitOverlay),
+  })`)
+
+  if (!state.tree || !state.gripper || !state.overlayApi || errors.length || timerDelayMs > 200) {
+    throw new Error(`Electron smoke check failed: ${JSON.stringify({ ...state, errors, timerDelayMs })}`)
+  }
+
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+  fs.writeFileSync(outputPath, JSON.stringify({ ...state, errors, timerDelayMs }, null, 2))
+  worker.kill()
+  fs.rmSync(smokeRepoPath, { force: true, recursive: true })
+  app.quit()
+}).catch((error) => {
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+  fs.writeFileSync(outputPath, JSON.stringify({ error: error.message }, null, 2))
+  fs.rmSync(smokeRepoPath, { force: true, recursive: true })
+  process.stderr.write(`[electron-smoke] ${error.stack || error.message}\n`)
+  app.exit(1)
+})

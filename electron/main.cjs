@@ -1,7 +1,8 @@
-const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray } = require('electron')
+const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, screen, shell, Tray, utilityProcess } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
-const { fetchRemote, readBranchState, readGitHubPullRequests } = require('./git-data.cjs')
+const { fetchRemote, readGitHubPullRequests } = require('./git-data.cjs')
+const { createRefreshQueue } = require('./refresh-queue.cjs')
 const { isNearRightEdge, settleWindowBounds } = require('./window-layout.cjs')
 
 const LOCAL_REFRESH_MS = 5000
@@ -14,19 +15,26 @@ let localRefreshTimer
 let remoteRefreshTimer
 let branchState
 let repoPath
-let refreshPromise
 let isQuitting = false
 let pullRequestState = { status: 'idle', pullRequests: [] }
 let layoutState = { docked: false }
 let moveTimer
 let positioningWindow = false
+let movingWindow = false
+let pendingMousePassthrough = false
+let gitWorker
+let workerRequestId = 0
+let repoGeneration = 0
+let refreshQueue
+let initializationPromise
+const workerRequests = new Map()
 
-function getCommandLineRepoPath() {
-  const direct = process.argv.find((argument) => argument.startsWith('--repo='))
+function getCommandLineRepoPath(argv = process.argv) {
+  const direct = argv.find((argument) => argument.startsWith('--repo='))
   if (direct) return direct.slice('--repo='.length)
 
-  const flagIndex = process.argv.indexOf('--repo')
-  if (flagIndex >= 0 && process.argv[flagIndex + 1]) return process.argv[flagIndex + 1]
+  const flagIndex = argv.indexOf('--repo')
+  if (flagIndex >= 0 && argv[flagIndex + 1]) return argv[flagIndex + 1]
   return process.env.BRANCH_ORGANISM_REPO || null
 }
 
@@ -43,8 +51,16 @@ function readSettings() {
 }
 
 function saveSettings(patch) {
-  fs.mkdirSync(path.dirname(getConfigPath()), { recursive: true })
-  fs.writeFileSync(getConfigPath(), JSON.stringify({ ...readSettings(), ...patch }, null, 2))
+  const configPath = getConfigPath()
+  const temporaryPath = `${configPath}.tmp`
+
+  try {
+    fs.mkdirSync(path.dirname(configPath), { recursive: true })
+    fs.writeFileSync(temporaryPath, JSON.stringify({ ...readSettings(), ...patch }, null, 2))
+    fs.renameSync(temporaryPath, configPath)
+  } catch {
+    fs.rmSync(temporaryPath, { force: true })
+  }
 }
 
 function saveRepoPath(nextRepoPath) {
@@ -53,6 +69,63 @@ function saveRepoPath(nextRepoPath) {
 
 function getInitialRepoPath() {
   return path.resolve(getCommandLineRepoPath() || readSettings().repoPath || DEFAULT_REPO_PATH)
+}
+
+function rejectWorkerRequests(error) {
+  for (const { reject, timer } of workerRequests.values()) {
+    clearTimeout(timer)
+    reject(error)
+  }
+  workerRequests.clear()
+}
+
+function stopGitWorker(error = new Error('Git background process stopped.')) {
+  const worker = gitWorker
+  gitWorker = null
+  worker?.kill()
+  rejectWorkerRequests(error)
+}
+
+function ensureGitWorker() {
+  if (gitWorker) return gitWorker
+
+  const worker = utilityProcess.fork(path.join(__dirname, 'git-worker.cjs'), [], {
+    serviceName: 'Branch Organism Git Snapshot',
+    stdio: 'ignore',
+  })
+  gitWorker = worker
+
+  worker.on('message', ({ error, id, state }) => {
+    const request = workerRequests.get(id)
+    if (!request) return
+    clearTimeout(request.timer)
+    workerRequests.delete(id)
+    if (error) request.reject(new Error(error))
+    else request.resolve(state)
+  })
+  worker.on('exit', (code) => {
+    if (gitWorker !== worker) return
+    gitWorker = null
+    rejectWorkerRequests(new Error(`Git background process exited with code ${code}.`))
+  })
+
+  return worker
+}
+
+function readBranchStateAsync(targetRepoPath, nextPullRequestState) {
+  return new Promise((resolve, reject) => {
+    const id = ++workerRequestId
+    const timer = setTimeout(() => {
+      const request = workerRequests.get(id)
+      if (!request) return
+      workerRequests.delete(id)
+      request.reject(new Error('Git snapshot timed out.'))
+      stopGitWorker(new Error('Git background process restarted after a timeout.'))
+    }, 30000)
+
+    workerRequests.set(id, { reject, resolve, timer })
+    ensureGitWorker().postMessage({ id, pullRequestState: nextPullRequestState, repoPath: targetRepoPath })
+  })
 }
 
 function placeWindow(window) {
@@ -215,47 +288,73 @@ async function chooseRepository() {
   })
   if (result.canceled || !result.filePaths[0]) return
 
-  const candidateState = readBranchState(result.filePaths[0], pullRequestState)
-  if (candidateState.status === 'error') {
-    await dialog.showMessageBox({
-      type: 'warning',
-      title: 'Not a Git repository',
-      message: 'Choose a folder inside a Git repository.',
-      detail: result.filePaths[0],
-    })
-    return
+  await trackRepository(result.filePaths[0], { showError: true })
+}
+
+async function trackRepository(candidatePath, { showError = false } = {}) {
+  let candidateState
+  try {
+    candidateState = await readBranchStateAsync(candidatePath, { status: 'idle', pullRequests: [] })
+  } catch (error) {
+    candidateState = { status: 'error', detail: error.message }
   }
 
+  if (candidateState.status === 'error') {
+    if (showError) {
+      await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Not a Git repository',
+        message: 'Choose a folder inside a Git repository.',
+        detail: candidateState.detail || candidatePath,
+      })
+    }
+    return false
+  }
+
+  repoGeneration += 1
   repoPath = candidateState.repoPath
+  pullRequestState = { status: 'idle', pullRequests: [] }
   saveRepoPath(repoPath)
   branchState = { ...candidateState, fetch: { status: 'idle' } }
   publishBranchState()
   overlayWindow.showInactive()
   await refreshBranchState({ fetch: true })
+  return true
 }
 
 function refreshBranchState({ fetch = false } = {}) {
-  if (refreshPromise) return refreshPromise
+  return refreshQueue.request({ fetch })
+}
 
-  refreshPromise = (async () => {
+async function runRefresh({ fetch }) {
+  const generation = repoGeneration
+  const targetRepoPath = repoPath
+
+  try {
     let fetchState = branchState?.fetch || { status: 'idle' }
     if (fetch && branchState?.status === 'ready') {
       fetchState = { status: 'fetching', checkedAt: fetchState.checkedAt }
       branchState = { ...branchState, fetch: fetchState }
       publishBranchState()
-      fetchState = await fetchRemote(repoPath)
-      pullRequestState = await readGitHubPullRequests(repoPath)
+      fetchState = await fetchRemote(targetRepoPath)
+      const nextPullRequestState = await readGitHubPullRequests(targetRepoPath)
+      if (generation !== repoGeneration || targetRepoPath !== repoPath) return
+      pullRequestState = nextPullRequestState
     }
 
-    const nextState = readBranchState(repoPath, pullRequestState)
+    const nextState = await readBranchStateAsync(targetRepoPath, pullRequestState)
+    if (generation !== repoGeneration || targetRepoPath !== repoPath) return
     if (nextState.status === 'ready') repoPath = nextState.repoPath
     branchState = { ...nextState, fetch: fetchState }
     publishBranchState()
-  })().finally(() => {
-    refreshPromise = null
-  })
-
-  return refreshPromise
+  } catch (error) {
+    if (generation !== repoGeneration || targetRepoPath !== repoPath) return
+    branchState = {
+      ...branchState,
+      fetch: { status: 'error', message: error.message, checkedAt: Date.now() },
+    }
+    publishBranchState()
+  }
 }
 
 function createOverlay() {
@@ -275,6 +374,7 @@ function createOverlay() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   })
 
@@ -283,6 +383,18 @@ function createOverlay() {
   overlayWindow.setIgnoreMouseEvents(true, { forward: true })
   placeWindow(overlayWindow)
   overlayWindow.on('move', handleWindowMove)
+  overlayWindow.on('will-move', () => {
+    movingWindow = true
+    pendingMousePassthrough = false
+    overlayWindow.setIgnoreMouseEvents(false)
+  })
+  overlayWindow.on('moved', () => {
+    movingWindow = false
+    if (pendingMousePassthrough) {
+      pendingMousePassthrough = false
+      overlayWindow.setIgnoreMouseEvents(true, { forward: true })
+    }
+  })
 
   if (process.env.BRANCH_ORGANISM_DEV === '1') {
     overlayWindow.loadURL('http://127.0.0.1:5173')
@@ -302,19 +414,33 @@ function createOverlay() {
   })
 }
 
-app.whenReady().then(() => {
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else initializationPromise = app.whenReady().then(async () => {
   app.setName('Branch Organism')
   if (process.platform === 'darwin') app.dock.hide()
 
   repoPath = getInitialRepoPath()
-  branchState = { ...readBranchState(repoPath, pullRequestState), fetch: { status: 'idle' } }
+  try {
+    branchState = { ...await readBranchStateAsync(repoPath, pullRequestState), fetch: { status: 'idle' } }
+  } catch (error) {
+    branchState = { status: 'error', repoPath, message: 'Unable to inspect this repository.', detail: error.message }
+  }
   if (branchState.status === 'ready') {
     repoPath = branchState.repoPath
     saveRepoPath(repoPath)
   }
+  refreshQueue = createRefreshQueue(runRefresh)
   ipcMain.handle('git-state:get', () => branchState)
   ipcMain.handle('layout-state:get', () => layoutState)
-  ipcMain.on('overlay:mouse-passthrough', (_event, ignore) => {
+  ipcMain.on('overlay:mouse-passthrough', (event, ignore) => {
+    if (event.sender !== overlayWindow?.webContents) return
+    if (ignore && movingWindow) {
+      pendingMousePassthrough = true
+      return
+    }
     overlayWindow?.setIgnoreMouseEvents(Boolean(ignore), { forward: true })
   })
   createOverlay()
@@ -328,6 +454,16 @@ app.whenReady().then(() => {
   globalShortcut.register('CommandOrControl+Shift+B', toggleOverlay)
 })
 
+if (hasSingleInstanceLock) {
+  app.on('second-instance', (_event, argv) => {
+    initializationPromise.then(async () => {
+      const requestedRepoPath = getCommandLineRepoPath(argv)
+      if (requestedRepoPath) await trackRepository(requestedRepoPath)
+      overlayWindow?.showInactive()
+    })
+  })
+}
+
 app.on('before-quit', () => {
   isQuitting = true
 })
@@ -336,6 +472,7 @@ app.on('will-quit', () => {
   clearInterval(localRefreshTimer)
   clearInterval(remoteRefreshTimer)
   clearTimeout(moveTimer)
+  stopGitWorker()
   globalShortcut.unregisterAll()
 })
 

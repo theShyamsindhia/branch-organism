@@ -9,12 +9,37 @@ function git(repoPath, args, options = {}) {
     return execFileSync('git', ['-C', repoPath, ...args], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 15000,
     }).trim()
   } catch (error) {
     if (options.allowFailure) return null
     const detail = error.stderr?.toString().trim()
     throw new Error(detail || error.message)
   }
+}
+
+function readRepositoryFingerprint(inputPath, pullRequestState = { status: 'idle' }) {
+  const repoPath = resolveRepositoryPath(inputPath)
+  if (!repoPath) return null
+
+  const head = git(repoPath, ['rev-parse', 'HEAD'], { allowFailure: true }) || 'unborn'
+  const current = git(repoPath, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { allowFailure: true }) || 'detached'
+  const refs = git(repoPath, [
+    'for-each-ref',
+    '--format=%(refname):%(objectname)',
+    'refs/heads',
+    'refs/remotes',
+  ], { allowFailure: true }) || ''
+
+  return JSON.stringify([
+    repoPath,
+    current,
+    head,
+    refs,
+    new Date().toISOString().slice(0, 10),
+    pullRequestState.status || 'idle',
+    pullRequestState.checkedAt || 0,
+  ])
 }
 
 function resolveRepositoryPath(inputPath) {
@@ -370,6 +395,7 @@ module.exports = {
   getRemoteWebUrl,
   readGitHubPullRequests,
   readBranchState,
+  readRepositoryFingerprint,
   resolveRepositoryPath,
   selectVisibleBranches,
   summarizeCheckRollup,

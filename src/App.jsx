@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 const PALETTE = ['#78a99d', '#b29a70', '#879aba', '#ad786f', '#7f9b76', '#a38198', '#6e9bab', '#a88b79']
 const SPINE_SEGMENTS = [
@@ -334,6 +334,7 @@ export default function App() {
   const [layout, setLayout] = useState(() => ({
     docked: !window.gitOverlay && new URLSearchParams(window.location.search).get('dock') === 'right',
   }))
+  const gripperReleaseTimer = useRef()
 
   useEffect(() => {
     if (!window.gitOverlay) return undefined
@@ -350,6 +351,11 @@ export default function App() {
       active = false
       unsubscribe()
     }
+  }, [])
+
+  useEffect(() => () => {
+    window.clearTimeout(gripperReleaseTimer.current)
+    window.gitOverlay?.setMousePassthrough(true)
   }, [])
 
   useEffect(() => {
@@ -387,9 +393,13 @@ export default function App() {
     return <EmptyState state={state} />
   }, [currentTick, state])
 
-  const wakeGripper = () => window.gitOverlay?.setMousePassthrough(false)
+  const wakeGripper = () => {
+    window.clearTimeout(gripperReleaseTimer.current)
+    window.gitOverlay?.setMousePassthrough(false)
+  }
   const releaseGripper = () => {
-    window.setTimeout(() => window.gitOverlay?.setMousePassthrough(true), 320)
+    window.clearTimeout(gripperReleaseTimer.current)
+    gripperReleaseTimer.current = window.setTimeout(() => window.gitOverlay?.setMousePassthrough(true), 320)
   }
 
   return (
