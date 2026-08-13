@@ -30,6 +30,8 @@ The current marker is anchored to the checked-out commit and prints its short SH
 
 Branches leave the spine at deterministic organic angles, alternating their rise and fall so the topology stays open and readable.
 
+Branch junctions come from each ref's real merge-base with the tracked remote base. Divergent length follows commits ahead; zero-ahead refs collapse into quiet buds at their actual ancestor. The overlay remembers one previous upstream checkpoint so the latest remote movement remains visible after sync.
+
 The menu-bar organism is the control surface. Click it once to show or hide the tree; right-click it to choose a repository, fetch immediately, open its GitHub page, or quit. The chosen folder is remembered on relaunch.
 
 ## Run it

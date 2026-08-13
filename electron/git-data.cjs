@@ -176,15 +176,18 @@ function getRelation(repoPath, localRef, remoteRef) {
   const counts = git(repoPath, ['rev-list', '--left-right', '--count', `${localRef}...${remoteRef}`], { allowFailure: true })
   if (!counts) return null
   const [ahead = 0, behind = 0] = counts.split(/\s+/).map(Number)
+  const localSha = git(repoPath, ['rev-parse', '--short', localRef], { allowFailure: true })
+  const remoteSha = git(repoPath, ['rev-parse', '--short', remoteRef], { allowFailure: true })
 
-  return { localRef, remoteRef, ahead, behind }
+  return { localRef, remoteRef, localSha, remoteSha, ahead, behind }
 }
 
-function readCommits(repoPath, refOrRange, limit = 6) {
+function readCommits(repoPath, refOrRange, limit = 6, { firstParent = false } = {}) {
   if (!refOrRange || limit < 1) return []
 
   const lines = git(repoPath, [
     'log',
+    ...(firstParent ? ['--first-parent'] : []),
     '--format=%h%x09%ct%x09%s',
     '-n', String(limit),
     refOrRange,
@@ -344,16 +347,25 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       const commits = branch.name === base
         ? []
         : readCommits(repoPath, `${comparisonBase}..${branch.name}`, Math.min(ahead, 6))
+      const mergeBase = git(repoPath, ['merge-base', comparisonBase, branch.name], { allowFailure: true })
+      const mergeBaseSha = mergeBase
+        ? git(repoPath, ['rev-parse', '--short', mergeBase], { allowFailure: true })
+        : null
+      const distanceOutput = mergeBase
+        ? git(repoPath, ['rev-list', '--first-parent', '--count', `${mergeBase}..${comparisonBase}`], { allowFailure: true })
+        : null
 
       return {
         ...branch,
         ahead,
         ageDays,
+        baseDistance: distanceOutput === null ? null : Number(distanceOutput),
         behind,
         commits,
         conflict,
         conflictSource: remoteConflict ? 'github' : localConflict === true ? 'local' : null,
         merged,
+        mergeBaseSha,
         pullRequest: pullRequest || null,
         stale: behind > 0,
         isBase: branch.name === base,
@@ -368,7 +380,7 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       current,
       base,
       comparisonBase,
-      baseCommits: readCommits(repoPath, comparisonBase, 9),
+      baseCommits: readCommits(repoPath, comparisonBase, 9, { firstParent: true }),
       remote,
       github: {
         status: pullRequestState.status,

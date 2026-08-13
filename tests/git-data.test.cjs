@@ -94,6 +94,8 @@ test('marks a branch behind dev as stale', (context) => {
   assert.equal(feature.ahead, 1)
   assert.equal(feature.commits.length, 1)
   assert.equal(feature.commits[0].subject, 'feature')
+  assert.equal(feature.baseDistance, 1)
+  assert.equal(feature.mergeBaseSha, run(repoPath, ['rev-parse', '--short', 'HEAD~1']))
   assert.equal(state.baseCommits[0].subject, 'dev moved')
   assert.equal(feature.stale, true)
   assert.ok(readRepositoryFingerprint(repoPath))
@@ -206,6 +208,7 @@ test('fetches and describes incoming upstream changes', async (context) => {
   assert.equal(state.remote.status, 'ready')
   assert.equal(state.remote.focus.remoteRef, 'origin/dev')
   assert.equal(state.remote.focus.behind, 1)
+  assert.equal(state.remote.base.remoteSha, run(repoPath, ['rev-parse', '--short', 'origin/dev']))
   assert.equal(state.remote.focus.incomingCommits[0].subject, 'extend upstream shape')
   assert.deepEqual(state.remote.focus.changedFiles[0], {
     status: 'A',
