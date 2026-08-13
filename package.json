@@ -1,0 +1,30 @@
+{
+  "name": "branch-organism",
+  "private": true,
+  "version": "0.12.0",
+  "description": "A minimal living Git branch overlay.",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && BRANCH_ORGANISM_DEV=1 electron .\"",
+    "dev:web": "vite",
+    "build": "vite build",
+    "package:mac": "npm run build && electron-packager . 'Branch Organism' --platform=darwin --arch=arm64 --out=work/release --overwrite --prune=true --asar --app-bundle-id=com.branchorganism.app --ignore='^/(work|outputs|tests|src)(/|$)'",
+    "start": "electron .",
+    "test": "node --test tests/*.test.cjs",
+    "check": "npm run test && npm run build"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^9.2.0",
+    "electron": "^37.2.6",
+    "vite": "^7.1.1",
+    "wait-on": "^8.0.4"
+  }
+}

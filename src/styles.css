@@ -1,0 +1,464 @@
+:root {
+  font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  color: #e7ece9;
+  background: transparent;
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+  background: transparent !important;
+}
+
+body {
+  overflow: hidden;
+  user-select: none;
+}
+
+.transparent-overlay {
+  position: relative;
+  width: 100%;
+  min-height: 100dvh;
+  background: transparent;
+}
+
+.tree-canvas {
+  position: absolute;
+  inset: 0;
+  transform-origin: 100% 94.7%;
+}
+
+.is-docked-right .tree-canvas {
+  transform: none;
+}
+
+.is-docked-right .tree-heading {
+  display: none;
+}
+
+.tree-gripper {
+  position: absolute;
+  top: 62px;
+  right: 14px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  opacity: 0.42;
+  cursor: grab;
+  -webkit-app-region: drag;
+  transition: opacity 160ms ease;
+  z-index: 3;
+}
+
+.tree-gripper:hover {
+  opacity: 1;
+}
+
+.tree-gripper:active {
+  cursor: grabbing;
+}
+
+.tree-gripper span {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(228, 236, 232, 0.88);
+  border-radius: 50%;
+  background: rgba(25, 32, 30, 0.72);
+  box-shadow: 0 0 0 3px rgba(225, 232, 228, 0.09), 0 1px 4px rgba(12, 16, 15, 0.3);
+}
+
+.is-docked-right .tree-gripper {
+  top: auto;
+  right: 4px;
+  bottom: 18px;
+}
+
+.git-tree {
+  display: block;
+  width: 100%;
+  height: 100dvh;
+  overflow: visible;
+  perspective: 1100px;
+}
+
+.git-tree text {
+  filter: drop-shadow(0 1px 0.8px rgba(248, 251, 249, 0.58));
+}
+
+.organism-growth {
+  transform-box: view-box;
+  transform-origin: 520px 720px;
+  transform-style: preserve-3d;
+  animation: organism-swivel 48s ease-in-out infinite alternate;
+  will-change: transform;
+}
+
+.repo-name {
+  fill: rgba(42, 50, 48, 0.9);
+  font-size: 13px;
+  font-weight: 580;
+  letter-spacing: -0.02em;
+}
+
+.repo-current,
+.tree-frequency,
+.base-label,
+.base-state,
+.tree-legend {
+  fill: rgba(55, 64, 61, 0.62);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 8px;
+  letter-spacing: 0.025em;
+}
+
+.tree-frequency {
+  fill: rgba(55, 64, 61, 0.44);
+}
+
+.branch-stem,
+.merge-path,
+.merge-progress,
+.conflict-mark,
+.base-spine path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.tree-branch {
+  opacity: var(--branch-opacity);
+}
+
+.tree-branch:hover {
+  opacity: 1;
+}
+
+.organism-growth:has(.tree-branch:hover) {
+  animation-play-state: paused;
+}
+
+.branch-hit-area {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 18;
+  pointer-events: stroke;
+  vector-effect: non-scaling-stroke;
+}
+
+.branch-stem {
+  stroke: var(--branch-color);
+  stroke-width: 1.35;
+  transition: stroke-width 120ms ease, opacity 120ms ease;
+}
+
+.branch-tip {
+  fill: var(--branch-color);
+  stroke: rgba(15, 18, 18, 0.78);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.tree-branch--current .branch-stem {
+  stroke-width: 2.25;
+}
+
+.tree-branch--current .branch-tip {
+  stroke: rgba(235, 241, 238, 0.78);
+}
+
+.branch-commit {
+  fill: rgba(24, 29, 28, 0.82);
+  stroke: var(--branch-color);
+  stroke-width: 0.95;
+  vector-effect: non-scaling-stroke;
+}
+
+.tree-branch--current .branch-commit {
+  fill: var(--branch-color);
+  stroke: rgba(235, 241, 238, 0.76);
+}
+
+.current-ring {
+  fill: none;
+  stroke: var(--branch-color);
+  stroke-width: 1;
+  opacity: 0.32;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity 100ms ease, transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tree-branch.is-tick .branch-stem {
+  stroke-width: 3.4;
+}
+
+.tree-branch.is-tick .current-ring {
+  opacity: 0.95;
+  transform: scale(1.48);
+}
+
+.tree-branch--conflict .branch-stem {
+  stroke: #b66f65;
+  stroke-dasharray: 9 5 2 5;
+}
+
+.conflict-mark {
+  stroke: #d18a7f;
+  stroke-width: 1.6;
+}
+
+.merge-path {
+  stroke: var(--branch-color);
+  stroke-width: 0.75;
+  stroke-dasharray: 2 5;
+  opacity: 0.16;
+}
+
+.merge-progress {
+  stroke: var(--branch-color);
+  stroke-width: 0.85;
+  stroke-dasharray: var(--merge-progress) 1;
+  opacity: 0.58;
+}
+
+.tree-branch--conflict .merge-progress {
+  stroke: #b66f65;
+}
+
+.merge-checkpoint {
+  fill: var(--branch-color);
+  opacity: 0.8;
+}
+
+.ghost-diff {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
+
+.branch-label__name {
+  fill: var(--branch-color);
+  font-size: 6.6px;
+  font-weight: 540;
+}
+
+.branch-label__progress,
+.current-label,
+.ghost-diff {
+  fill: rgba(225, 232, 228, 0.54);
+  font-size: 6.2px;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
+
+.branch-label__progress {
+  fill: var(--branch-color);
+}
+
+.current-label {
+  fill: var(--branch-color);
+  font-size: 7.6px;
+}
+
+.ghost-diff {
+  fill: rgba(225, 232, 228, 0.44);
+}
+
+.branch-hover-card {
+  overflow: visible;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tree-branch:hover .branch-hover-card {
+  opacity: 1;
+  visibility: visible;
+}
+
+.branch-hover-card__surface {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid rgba(230, 237, 233, 0.14);
+  border-radius: 8px;
+  color: rgba(226, 233, 229, 0.68);
+  background: rgba(20, 25, 24, 0.94);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 8px 24px rgba(10, 13, 12, 0.18);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 7px;
+  line-height: 1.25;
+}
+
+.branch-hover-card__surface strong {
+  overflow-wrap: anywhere;
+  color: rgba(241, 246, 243, 0.94);
+  font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  font-size: 8.5px;
+  font-weight: 620;
+  line-height: 1.16;
+}
+
+.branch-hover-card__pr-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: rgba(226, 233, 229, 0.48);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.base-spine .base-spine__underlay {
+  stroke: rgba(16, 20, 19, 0.72);
+  stroke-width: 4.2;
+}
+
+.base-spine .base-spine__line {
+  stroke: rgba(223, 230, 226, 0.78);
+  stroke-width: 1.45;
+}
+
+.base-spine circle {
+  fill: rgba(223, 230, 226, 0.66);
+}
+
+.base-spine .branch-junction {
+  fill: rgba(223, 230, 226, 0.46);
+}
+
+.base-spine .base-commit {
+  fill: rgba(28, 34, 32, 0.86);
+  stroke: rgba(228, 235, 231, 0.82);
+  stroke-width: 1.15;
+  vector-effect: non-scaling-stroke;
+}
+
+.base-spine--current .base-spine__line {
+  stroke-width: 2;
+}
+
+.base-spine .spine-current-ring {
+  fill: none;
+  stroke: #6e9bab;
+  stroke-width: 1.2;
+  opacity: 0.4;
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity 100ms ease, transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.base-spine .spine-current-dot {
+  fill: #6e9bab;
+  stroke: rgba(235, 241, 238, 0.82);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.spine-current-leader {
+  stroke: #6e9bab;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.spine-current-label {
+  fill: #6e9bab;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 6.8px;
+}
+
+.is-docked-right .spine-current-label {
+  font-size: 9.5px;
+  font-weight: 620;
+}
+
+.is-docked-right .spine-current-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(1.35);
+}
+
+.is-docked-right .spine-current-ring {
+  stroke-width: 1.6;
+  opacity: 0.68;
+}
+
+.base-spine.is-tick .base-spine__line {
+  stroke-width: 3;
+}
+
+.base-spine.is-tick .spine-current-ring {
+  opacity: 0.92;
+  transform: scale(1.5);
+}
+
+.base-spine .spine-root {
+  fill: rgba(42, 50, 48, 0.84);
+  stroke: rgba(235, 240, 237, 0.7);
+  stroke-width: 1;
+}
+
+.base-label {
+  fill: rgba(42, 50, 48, 0.84);
+  font-size: 9px;
+}
+
+@keyframes organism-swivel {
+  from {
+    transform: perspective(1100px) rotateY(-8deg) rotateX(1.2deg) rotateZ(-0.65deg);
+  }
+
+  to {
+    transform: perspective(1100px) rotateY(8deg) rotateX(-1.2deg) rotateZ(0.65deg);
+  }
+}
+
+.tree-state {
+  position: absolute;
+  right: 32px;
+  bottom: 42px;
+  max-width: 300px;
+  padding: 14px 16px;
+  border-left: 1px solid rgba(224, 231, 227, 0.26);
+  color: rgba(236, 241, 238, 0.78);
+  background: rgba(13, 16, 16, 0.3);
+  backdrop-filter: blur(10px);
+}
+
+.tree-state span,
+.tree-state p {
+  margin: 0;
+}
+
+.tree-state span {
+  font-size: 11px;
+}
+
+.tree-state p {
+  padding-top: 5px;
+  color: rgba(236, 241, 238, 0.48);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .organism-growth {
+    animation: none;
+  }
+
+  .branch-stem,
+  .current-ring,
+  .spine-current-ring {
+    transition: none;
+  }
+}
