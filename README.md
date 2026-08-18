@@ -1,15 +1,18 @@
-# Branch Organism
+# vertebrae
 
-A transparent, always-on-top Git tree. Its resting view keeps seven meaningful local branches, plus one open PR ghost per GitHub author:
+A transparent, always-on-top Git tree. Its resting view is a forward-looking branch landscape:
 
-- `origin/dev` descends from a free latest-history tip into an older-history root attached to the lower-right edge;
+- `main` is automatically treated as the integration spine when it exists, with its tracked remote as the source of truth;
+- `prd`, `prod`, or `production` becomes a separate production lane that honestly shows integration-only and production-only commits;
+- a fully contained `dev` or `develop` ref collapses into one quiet retired-history marker instead of competing with current work;
+- merged feature branches are hidden by default; only local refs still diverging from the integration spine remain in the live canopy;
 - every branch grows leftward from its real merge-base ring, spaced while preserving ancestry order;
 - branch length follows commits ahead, with real commit nodes and a short head SHA;
 - current, upstream movement, and conflicts speak loudly while healthy or stale refs recede;
-- conflicts use a broken rust stem and a clean cross at the branch head;
+- conflicts use a broken rust stem and a clean cross at the branch head, with exact files and conflict kinds revealed on hover;
 - open PRs turn warm yellow; local PR refs stay solid while remote-only teammate PRs use dashed ghost limbs, with friendly names retained for known collaborators;
-- a segmented ring at each open PR head shows passing, failing, and pending checks without adding a dashboard;
-- merged limbs and their complete check rings turn muted purple; merging PRs contract into their recorded checkpoint, and recent merges leave an explicitly labeled purple ring on the spine for 24 hours, while closed-unmerged limbs only fade;
+- each passed check opens into one petal at the PR head, while failing and pending checks remain in the segmented ring; the final passing check completes the flower;
+- merged limbs and their completed flowers turn muted purple; merging PRs contract into a hoverable checkpoint that keeps their PR details on the spine for 24 hours, while closed-unmerged limbs only fade;
 - hovering a branch reveals its full name, PR state/title, named CI checks, ahead/behind counts, and last activity;
 - a checked-out ref at the base head collapses onto the same spine commit instead of inventing divergence;
 - the current marker briefly ticks every four seconds;
@@ -29,9 +32,9 @@ Branches leave the spine at stable organic angles so the topology stays open and
 
 Branch junctions come from each ref's real merge-base with the tracked remote base. Divergent length follows commits ahead; zero-ahead refs collapse into quiet buds at their actual ancestor. The overlay remembers one previous upstream checkpoint so the latest remote movement remains visible after sync.
 
-The menu-bar organism is the control surface. Click it once to show or hide the tree; right-click it to choose a repository, fetch immediately, open its GitHub page, or quit. The chosen folder is remembered on relaunch.
+The menu-bar organism is the control surface. Click it once to show or hide the tree; right-click it to choose a repository, fetch immediately, open its GitHub page, or quit. **Branch Landscape** can override the integration spine, production lane, and retired-history refs per repository. The chosen folder and roles are remembered on relaunch.
 
-On first launch, Branch Organism opens the native folder picker automatically. Choose the repository root or any folder inside it. If the saved repository later moves, clicking the menu-bar organism opens the picker again.
+On first launch, vertebrae opens the native folder picker automatically. Choose the repository root or any folder inside it. If the saved repository later moves, clicking the menu-bar organism opens the picker again.
 
 ## Share the Mac app
 
@@ -42,7 +45,7 @@ npm install
 npm run package:share
 ```
 
-The shareable `.dmg` and `.zip` appear in `work/share`. Send either one. The recipient drags Branch Organism into Applications, opens it, and chooses a local Git repository; Node.js and this source repository are not required on their Mac.
+The shareable `.dmg` and `.zip` appear in `work/share`. Send either one. The recipient drags vertebrae into Applications, opens it, and chooses a local Git repository; Node.js and this source repository are not required on their Mac.
 
 Because local builds are not notarized by Apple, the recipient may need to Control-click the app and choose **Open** the first time. A frictionless double-click install requires an Apple Developer ID certificate and notarization.
 
@@ -76,4 +79,4 @@ BRANCH_ORGANISM_REPO=/absolute/path/to/repository npm run dev
 
 Press `Command/Ctrl + Shift + B` to hide or reveal the overlay. It is intentionally click-through and appears on every workspace.
 
-Choose the tracked folder from the menu-bar control, pass `--repo=/absolute/path`, or set `BRANCH_ORGANISM_REPO`. The base branch fallback order is `dev`, `develop`, `main`, then `master`. The tree prefers `origin/<base>` before other configured upstreams.
+Choose the tracked folder from the menu-bar control, pass `--repo=/absolute/path`, or set `BRANCH_ORGANISM_REPO`. Automatic integration selection prefers the remote default, then `main`, `master`, the current conventional branch, `dev`, and `develop`. The tree prefers `origin/<base>` before other configured upstreams.

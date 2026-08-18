@@ -1,4 +1,7 @@
 :root {
+  --neutral-node: #74807c;
+  --neutral-stroke: rgba(104, 116, 112, 0.82);
+  --neutral-track: rgba(104, 116, 112, 0.34);
   font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
   color: #e7ece9;
   background: transparent;
@@ -72,10 +75,9 @@ body {
   display: block;
   width: 10px;
   height: 10px;
-  border: 1px solid rgba(228, 236, 232, 0.88);
+  border: 1px solid var(--neutral-stroke);
   border-radius: 50%;
-  background: rgba(25, 32, 30, 0.72);
-  box-shadow: 0 0 0 3px rgba(225, 232, 228, 0.09), 0 1px 4px rgba(12, 16, 15, 0.3);
+  background: rgba(116, 128, 124, 0.18);
 }
 
 .is-docked-right .tree-gripper {
@@ -89,10 +91,6 @@ body {
   width: 100%;
   height: 100dvh;
   overflow: visible;
-}
-
-.git-tree text {
-  filter: drop-shadow(0 0.5px 0.5px rgba(248, 251, 249, 0.24));
 }
 
 .organism-growth {
@@ -154,16 +152,17 @@ body {
 }
 
 .branch-junction-ring {
-  fill: rgba(26, 31, 30, 0.92);
+  fill: var(--branch-color);
+  fill-opacity: 0.16;
   stroke: var(--branch-color);
-  stroke-width: 1.4;
+  stroke-width: 1.1;
   vector-effect: non-scaling-stroke;
 }
 
 .branch-tip {
   fill: var(--branch-color);
-  stroke: rgba(15, 18, 18, 0.78);
-  stroke-width: 1.5;
+  stroke: var(--branch-color);
+  stroke-width: 0.7;
   vector-effect: non-scaling-stroke;
 }
 
@@ -172,7 +171,7 @@ body {
 }
 
 .tree-branch--current .branch-tip {
-  stroke: rgba(235, 241, 238, 0.78);
+  stroke: var(--branch-color);
 }
 
 .tree-branch--pull-request .branch-stem {
@@ -185,7 +184,8 @@ body {
 }
 
 .tree-branch--pull-request .branch-commit {
-  fill: rgba(24, 29, 28, 0.36);
+  fill: var(--branch-color);
+  fill-opacity: 0.2;
 }
 
 .tree-branch--draft {
@@ -202,15 +202,17 @@ body {
 }
 
 .branch-commit {
-  fill: rgba(24, 29, 28, 0.82);
+  fill: var(--branch-color);
+  fill-opacity: 0.18;
   stroke: var(--branch-color);
-  stroke-width: 0.95;
+  stroke-width: 0.8;
   vector-effect: non-scaling-stroke;
 }
 
 .tree-branch--current .branch-commit {
   fill: var(--branch-color);
-  stroke: rgba(235, 241, 238, 0.76);
+  fill-opacity: 0.72;
+  stroke: var(--branch-color);
 }
 
 .current-ring {
@@ -233,14 +235,31 @@ body {
 }
 
 .check-ring__track {
-  stroke: rgba(29, 34, 33, 0.88);
-  stroke-width: 2.8;
+  stroke: var(--neutral-track);
+  stroke-width: 1.6;
 }
 
 .check-ring__segment {
   stroke: var(--check-color);
   stroke-linecap: butt;
   stroke-width: 1.7;
+}
+
+.check-bloom {
+  pointer-events: none;
+}
+
+.check-bloom__petal {
+  fill: var(--check-color);
+  stroke: var(--check-color);
+  stroke-opacity: 0.5;
+  stroke-width: 0.45;
+  opacity: 0.82;
+  transform-box: fill-box;
+  transform-origin: center;
+  vector-effect: non-scaling-stroke;
+  animation: check-petal-open 460ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: var(--petal-delay);
 }
 
 .tree-branch.is-tick .branch-stem {
@@ -301,7 +320,10 @@ body {
   transition: opacity 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.tree-branch:hover .branch-hover-card {
+.tree-branch:hover .branch-hover-card,
+.production-lane:hover .branch-hover-card,
+.retired-branch:hover .branch-hover-card,
+.recent-merge:hover .branch-hover-card {
   opacity: 1;
   visibility: visible;
 }
@@ -338,6 +360,37 @@ body {
   -webkit-line-clamp: 2;
 }
 
+.branch-hover-card__conflicts {
+  display: grid;
+  gap: 3px;
+  margin: 2px 0;
+  padding: 5px 0;
+  border-top: 1px solid rgba(198, 111, 93, 0.18);
+  border-bottom: 1px solid rgba(198, 111, 93, 0.18);
+  color: rgba(226, 233, 229, 0.58);
+}
+
+.branch-hover-card__section-title {
+  color: #c66f5d;
+  font-weight: 600;
+}
+
+.branch-hover-card__conflict {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+}
+
+.branch-hover-card__conflict > :first-child {
+  overflow-wrap: anywhere;
+  color: rgba(226, 233, 229, 0.82);
+}
+
+.branch-hover-card__conflict > :last-child {
+  color: rgba(198, 111, 93, 0.72);
+  white-space: nowrap;
+}
+
 .branch-hover-card__checks {
   display: grid;
   gap: 2px;
@@ -371,13 +424,12 @@ body {
 }
 
 .base-spine .base-spine__underlay {
-  stroke: rgba(16, 20, 19, 0.72);
-  stroke-width: 3.8;
+  display: none;
 }
 
 .base-spine .base-spine__line {
-  stroke: rgba(223, 230, 226, 0.78);
-  stroke-width: 1.25;
+  stroke: var(--neutral-stroke);
+  stroke-width: 1.6;
 }
 
 .upstream-ghost path {
@@ -388,8 +440,7 @@ body {
 }
 
 .upstream-ghost__underlay {
-  stroke: rgba(16, 20, 19, 0.58);
-  stroke-width: 3.8;
+  display: none;
 }
 
 .upstream-ghost__line {
@@ -399,15 +450,17 @@ body {
 }
 
 .upstream-ghost__checkpoint {
-  fill: rgba(25, 31, 30, 0.9) !important;
-  stroke: rgba(126, 166, 171, 0.62);
+  fill: rgb(126, 166, 171) !important;
+  fill-opacity: 0.18;
+  stroke: rgba(126, 166, 171, 0.78);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 
 .upstream-ghost__head {
-  fill: rgba(126, 166, 171, 0.9) !important;
-  stroke: rgba(235, 241, 238, 0.52);
+  fill: rgb(126, 166, 171) !important;
+  fill-opacity: 0.82;
+  stroke: rgba(126, 166, 171, 0.88);
   stroke-width: 0.9;
   vector-effect: non-scaling-stroke;
 }
@@ -420,7 +473,7 @@ body {
 }
 
 .base-spine circle {
-  fill: rgba(223, 230, 226, 0.66);
+  fill: var(--neutral-node);
 }
 
 .base-spine .check-ring circle {
@@ -428,22 +481,145 @@ body {
 }
 
 .base-spine .branch-junction {
-  fill: rgba(223, 230, 226, 0.46);
+  fill: var(--neutral-node);
+  fill-opacity: 0.34;
 }
 
 .base-spine .base-commit {
-  fill: rgba(28, 34, 32, 0.86);
-  stroke: rgba(228, 235, 231, 0.82);
-  stroke-width: 1.15;
+  fill: var(--neutral-node);
+  fill-opacity: 0.18;
+  stroke: var(--neutral-stroke);
+  stroke-width: 0.9;
   vector-effect: non-scaling-stroke;
 }
 
+.production-lane,
+.retired-branch {
+  transition: opacity 140ms ease;
+}
+
+.production-lane {
+  color: #879aba;
+  opacity: 0.82;
+}
+
+.production-lane:hover,
+.retired-branch:hover {
+  opacity: 1;
+}
+
+.production-lane__hit-area,
+.retired-branch__hit-area {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 18;
+  pointer-events: stroke;
+  vector-effect: non-scaling-stroke;
+}
+
+.production-lane__line,
+.retired-branch__line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.production-lane__line {
+  stroke: currentColor;
+  stroke-width: 1.35;
+}
+
+.production-lane--drift .production-lane__line {
+  stroke-dasharray: 5 3;
+}
+
+.production-lane__junction,
+.production-lane__commit,
+.production-lane__tip {
+  stroke: currentColor;
+  vector-effect: non-scaling-stroke;
+}
+
+.production-lane__junction,
+.production-lane__commit {
+  fill: currentColor;
+  fill-opacity: 0.16;
+}
+
+.production-lane__junction {
+  stroke-width: 1.2;
+}
+
+.production-lane__commit {
+  stroke-width: 0.9;
+}
+
+.production-lane__tip {
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 0.6;
+}
+
+.production-lane__label,
+.production-lane__status,
+.retired-branch__label {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+}
+
+.production-lane__label {
+  fill: currentColor;
+  font-size: 6.8px;
+  font-weight: 560;
+}
+
+.production-lane__status {
+  fill: rgba(135, 154, 186, 0.7);
+  font-size: 5.8px;
+}
+
+.retired-branch {
+  color: #8b858e;
+  opacity: 0.3;
+}
+
+.retired-branch__line {
+  stroke: currentColor;
+  stroke-width: 0.85;
+  stroke-dasharray: 1.5 3.5;
+}
+
+.retired-branch__junction,
+.retired-branch__tip {
+  fill: currentColor;
+  fill-opacity: 0.16;
+  stroke: currentColor;
+  stroke-width: 0.9;
+  vector-effect: non-scaling-stroke;
+}
+
+.retired-branch__label {
+  fill: currentColor;
+  font-size: 5.8px;
+}
+
 .recent-merge__ring {
-  fill: rgba(24, 29, 28, 0.9) !important;
+  fill: var(--branch-color) !important;
+  fill-opacity: 0.18;
   stroke: var(--branch-color);
   stroke-width: 1.25;
   opacity: 0.68;
   vector-effect: non-scaling-stroke;
+}
+
+.recent-merge__hit-area {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.recent-merge:hover .recent-merge__ring,
+.recent-merge:hover .recent-merge__label {
+  opacity: 1;
 }
 
 .recent-merge__label {
@@ -454,7 +630,7 @@ body {
 }
 
 .base-spine--current .base-spine__line {
-  stroke-width: 1.5;
+  stroke-width: 1.8;
 }
 
 .base-spine .spine-current-ring {
@@ -469,8 +645,8 @@ body {
 
 .base-spine .spine-current-dot {
   fill: #6e9bab;
-  stroke: rgba(235, 241, 238, 0.82);
-  stroke-width: 1;
+  stroke: #6e9bab;
+  stroke-width: 0.7;
   vector-effect: non-scaling-stroke;
 }
 
@@ -512,14 +688,20 @@ body {
 }
 
 .base-spine .spine-root {
-  fill: rgba(42, 50, 48, 0.84);
-  stroke: rgba(235, 240, 237, 0.7);
-  stroke-width: 1;
+  fill: var(--neutral-node);
+  stroke: var(--neutral-stroke);
+  stroke-width: 0.7;
 }
 
 .base-label {
-  fill: rgba(223, 230, 226, 0.68);
+  fill: rgba(115, 129, 124, 0.86);
   font-size: 6.8px;
+}
+
+.base-source-label {
+  fill: rgba(124, 137, 133, 0.58);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 5.8px;
 }
 
 .tree-state {
@@ -577,6 +759,18 @@ body {
   }
 }
 
+@keyframes check-petal-open {
+  from {
+    opacity: 0;
+    transform: scale(0.12);
+  }
+
+  to {
+    opacity: 0.82;
+    transform: scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .organism-growth {
     animation: none;
@@ -589,7 +783,8 @@ body {
   }
 
   .tree-branch--merging,
-  .tree-branch--closing {
+  .tree-branch--closing,
+  .check-bloom__petal {
     animation-duration: 1ms;
   }
 }

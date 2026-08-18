@@ -25,21 +25,40 @@ const demoState = {
   status: 'ready',
   repoName: 'studio',
   current: 'feat/composer-translations',
-  base: 'dev',
-  comparisonBase: 'origin/dev',
+  base: 'main',
+  comparisonBase: 'origin/main',
   totalBranches: 42,
   fetch: { status: 'ready', checkedAt: Date.now() },
   remote: {
     status: 'ready',
-    base: { localRef: 'dev', remoteRef: 'origin/dev', localSha: 'd82405', remoteSha: 'd82410', ahead: 0, behind: 5 },
+    base: { localRef: 'main', remoteRef: 'origin/main', localSha: 'd82405', remoteSha: 'd82410', ahead: 0, behind: 5 },
+  },
+  landscape: {
+    availableBranches: ['main', 'prd', 'dev'],
+    integration: { label: 'Beta / Integration', name: 'main' },
+    production: {
+      commits: [
+        { sha: '9b4e1cc', subject: 'production checkpoint' },
+        { sha: '71cdd42', subject: 'release hardening' },
+      ],
+      integrationAhead: 1,
+      mergeBaseSha: '68b24d1',
+      mergeDistance: 4,
+      name: 'prd',
+      productionAhead: 2,
+      ref: 'origin/prd',
+      sha: '9b4e1cc',
+      status: 'drift',
+    },
+    retired: [{ contained: true, mergeDistance: 7, name: 'dev', ref: 'origin/dev', sha: '8abd3ed', uniqueCommits: 0 }],
   },
   baseCommits: Array.from({ length: 9 }, (_, index) => ({
     sha: `d${String(82410 - index).padStart(5, '0')}`,
-    subject: `dev checkpoint ${9 - index}`,
+    subject: `main checkpoint ${9 - index}`,
   })),
   branches: [
     ['feat/composer-translations', 14, 5, 0, true, false, false, 'CLEAN'],
-    ['dev', 0, 0, 0, false, true, true, null],
+    ['main', 0, 0, 0, false, true, true, null],
     ['codex/composer-workflow-ia', 8, 2, 1, false, false, false, 'UNSTABLE'],
     ['experiment/category-colors', 5, 0, 3, false, false, false, 'CLEAN'],
     ['fix/shopify-connection', 4, 9, 8, false, false, false, 'DIRTY'],
@@ -69,6 +88,14 @@ const demoState = {
     isBase,
     merged,
     conflict: mergeStateStatus === 'DIRTY',
+    conflictDetails: mergeStateStatus === 'DIRTY' ? {
+      files: [
+        { path: 'src/components/Composer.jsx', type: 'content' },
+        { path: 'src/styles/composer.css', type: 'modify / delete' },
+      ],
+      status: 'conflicting',
+      total: 2,
+    } : null,
     pullRequest: mergeStateStatus ? {
       number: 2300 + index,
       mergeStateStatus,
@@ -202,8 +229,13 @@ function checkProgressLabel(branch) {
   return `${checks.total}/${checks.total} checks`
 }
 
-function CheckRing({ checks, color, x, y }) {
+function CheckRing({ checks, color, hidePassed = false, x, y }) {
   if (!checks?.items?.length) return null
+
+  const visibleChecks = hidePassed
+    ? checks.items.filter((check) => check.status !== 'passed')
+    : checks.items
+  if (!visibleChecks.length) return null
 
   const radius = 8.2
   const circumference = 2 * Math.PI * radius
@@ -213,7 +245,7 @@ function CheckRing({ checks, color, x, y }) {
   return (
     <g className="check-ring" transform={`rotate(-90 ${x} ${y})`}>
       <circle className="check-ring__track" cx={x} cy={y} r={radius} />
-      {checks.items.map((check, index) => (
+      {checks.items.map((check, index) => hidePassed && check.status === 'passed' ? null : (
         <circle
           className={`check-ring__segment check-ring__segment--${check.status}`}
           cx={x}
@@ -227,6 +259,188 @@ function CheckRing({ checks, color, x, y }) {
           <title>{check.name} · {check.status}</title>
         </circle>
       ))}
+    </g>
+  )
+}
+
+function checksFullyPassed(checks) {
+  return Boolean(
+    checks?.items?.length
+    && checks.total === checks.passed
+    && checks.failed === 0
+    && checks.pending === 0
+    && checks.items.every((check) => check.status === 'passed'),
+  )
+}
+
+function CheckBloom({ checks, color, x, y }) {
+  const passedChecks = (checks?.items || [])
+    .map((check, index) => ({ check, index }))
+    .filter(({ check }) => check.status === 'passed')
+  if (!passedChecks.length) return null
+
+  const count = checks.items.length
+  const petalDistance = clamp(8.2 + count * 0.11, 8.4, 10.8)
+  const petalLength = clamp(4.8 - Math.max(0, count - 12) * 0.08, 3.2, 4.8)
+  const petalWidth = clamp((Math.PI * petalDistance / count) * 0.42, 1.1, 2.55)
+
+  return (
+    <g className="check-bloom" transform={`translate(${x} ${y})`}>
+      {passedChecks.map(({ check, index }) => (
+        <g key={`${check.name}-${index}`} transform={`rotate(${index * 360 / count})`}>
+          <ellipse
+            className="check-bloom__petal"
+            cx="0"
+            cy={-petalDistance}
+            rx={petalWidth}
+            ry={petalLength}
+            style={{
+              '--check-color': color || CHECK_COLORS.passed,
+              '--petal-delay': `${index * 34}ms`,
+            }}
+          >
+            <title>{check.name} · passed</title>
+          </ellipse>
+        </g>
+      ))}
+    </g>
+  )
+}
+
+function formatTimestamp(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'unknown'
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+}
+
+function MergedCheckpoint({ merge, mergeIndex, point }) {
+  const checkItems = (merge.checks?.items || []).slice(0, 8)
+  const cardHeight = 132 + (checkItems.length ? 18 + checkItems.length * 13 : 0)
+  const cardX = point.x < 250 ? clamp(point.x + 12, 12, 288) : clamp(point.x - 224, 12, 288)
+  const cardY = clamp(point.y - 64, 12, 748 - cardHeight)
+
+  return (
+    <g className="recent-merge" style={{ '--branch-color': MERGED_COLOR }}>
+      <circle className="recent-merge__hit-area" cx={point.x} cy={point.y} r="12" />
+      <circle className="recent-merge__ring" cx={point.x} cy={point.y} r="4.2">
+        <title>{merge.authorName} merged PR #{merge.number} · {merge.title}</title>
+      </circle>
+      <CheckRing checks={merge.checks} color={MERGED_COLOR} hidePassed x={point.x} y={point.y} />
+      <CheckBloom checks={merge.checks} color={MERGED_COLOR} x={point.x} y={point.y} />
+      <text className="recent-merge__label" textAnchor="end" x={point.x - 7} y={point.y - 5 - (mergeIndex % 2) * 6}>
+        merged · {merge.authorName} #{merge.number}
+      </text>
+      <foreignObject className="branch-hover-card" x={cardX} y={cardY} width="220" height={cardHeight}>
+        <div className="branch-hover-card__surface" xmlns="http://www.w3.org/1999/xhtml">
+          <strong>{merge.title || `PR #${merge.number}`}</strong>
+          <span>{merge.authorName === merge.authorLogin
+            ? `@${merge.authorLogin}`
+            : `${merge.authorName} · @${merge.authorLogin}`}</span>
+          <span>PR #{merge.number} · merged</span>
+          <span>merge commit · {merge.mergeSha || 'unknown'}</span>
+          <span>{checkSummary(merge.checks)}</span>
+          {checkItems.length > 0 && (
+            <span className="branch-hover-card__checks">
+              {checkItems.map((check, checkIndex) => (
+                <span className="branch-hover-card__check" key={`${check.name}-${checkIndex}`}>
+                  <span className={`branch-hover-card__check-dot branch-hover-card__check-dot--${check.status}`} />
+                  <span>{check.workflow ? `${check.workflow} · ` : ''}{check.name}</span>
+                </span>
+              ))}
+              {(merge.checks?.items?.length || 0) > checkItems.length && <span>+{merge.checks.items.length - checkItems.length} more</span>}
+            </span>
+          )}
+          <span>merged · {formatTimestamp(merge.mergedAt)}</span>
+        </div>
+      </foreignObject>
+    </g>
+  )
+}
+
+function ProductionLane({ integrationName, lane, spinePosition }) {
+  if (!lane) return null
+
+  const start = pointOnSpine(spinePosition)
+  const length = clamp(74 + Math.sqrt(lane.productionAhead || 0) * 16, 82, 122)
+  const tip = {
+    x: clamp(start.x + length, 80, 500),
+    y: clamp(start.y - 42 - Math.sqrt(lane.productionAhead || 0) * 8, 76, 692),
+  }
+  const curve = [
+    start,
+    { x: start.x + length * 0.18, y: start.y + 5 },
+    { x: tip.x - length * 0.22, y: tip.y + 17 },
+    tip,
+  ]
+  const path = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} C ${curve[1].x.toFixed(1)} ${curve[1].y.toFixed(1)}, ${curve[2].x.toFixed(1)} ${curve[2].y.toFixed(1)}, ${tip.x.toFixed(1)} ${tip.y.toFixed(1)}`
+  const commits = (lane.commits || []).slice(0, 4).reverse()
+  const status = lane.status === 'drift'
+    ? `drift · ${integrationName} +${lane.integrationAhead} · ${lane.name} +${lane.productionAhead}`
+    : lane.status === 'awaiting-promotion'
+      ? `awaiting promotion · +${lane.integrationAhead}`
+      : lane.status === 'production-ahead'
+        ? `production ahead · +${lane.productionAhead}`
+        : 'synced'
+  const cardX = clamp(tip.x - 224, 12, 288)
+  const cardY = clamp(tip.y - 60, 12, 608)
+
+  return (
+    <g className={`production-lane production-lane--${lane.status}`}>
+      <path className="production-lane__hit-area" d={path} />
+      <path className="production-lane__line" d={path} />
+      <circle className="production-lane__junction" cx={start.x} cy={start.y} r="4.2">
+        <title>promotion base · {lane.mergeBaseSha || 'unknown'}</title>
+      </circle>
+      {commits.map((commit, index) => {
+        const ratio = commits.length === 1 ? 0.68 : 0.34 + (index / (commits.length - 1)) * 0.44
+        const point = pointOnCubic(curve, ratio)
+        return (
+          <circle className="production-lane__commit" cx={point.x} cy={point.y} key={`${commit.sha}-${index}`} r="1.5">
+            <title>{commit.sha} · {commit.subject}</title>
+          </circle>
+        )
+      })}
+      <circle className="production-lane__tip" cx={tip.x} cy={tip.y} r="3.2" />
+      <text className="production-lane__label" textAnchor="end" x={tip.x - 7} y={tip.y - 4}>{lane.name} · Production</text>
+      <text className="production-lane__status" textAnchor="end" x={tip.x - 7} y={tip.y + 7}>{status}</text>
+      <foreignObject className="branch-hover-card" x={cardX} y={cardY} width="220" height="126">
+        <div className="branch-hover-card__surface" xmlns="http://www.w3.org/1999/xhtml">
+          <strong>{lane.name} · Production</strong>
+          <span>{status}</span>
+          <span>{lane.ref} · {lane.sha || 'unknown'}</span>
+          <span>diverged at · {lane.mergeBaseSha || 'unknown'}</span>
+          <span>{integrationName} has {lane.integrationAhead} unique · {lane.name} has {lane.productionAhead} unique</span>
+        </div>
+      </foreignObject>
+    </g>
+  )
+}
+
+function RetiredMarker({ branch, index, spinePosition }) {
+  const start = pointOnSpine(spinePosition)
+  const tip = {
+    x: clamp(start.x - 58 - index * 8, 56, 460),
+    y: clamp(start.y + 16 + index * 9, 78, 704),
+  }
+  const path = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} C ${(start.x - 16).toFixed(1)} ${(start.y + 2).toFixed(1)}, ${(tip.x + 19).toFixed(1)} ${(tip.y - 5).toFixed(1)}, ${tip.x.toFixed(1)} ${tip.y.toFixed(1)}`
+  const cardX = tip.x < 250 ? clamp(tip.x + 10, 12, 288) : clamp(tip.x - 224, 12, 288)
+  const cardY = clamp(tip.y - 54, 12, 622)
+
+  return (
+    <g className="retired-branch">
+      <path className="retired-branch__hit-area" d={path} />
+      <path className="retired-branch__line" d={path} />
+      <circle className="retired-branch__junction" cx={start.x} cy={start.y} r="2.2" />
+      <circle className="retired-branch__tip" cx={tip.x} cy={tip.y} r="2.2" />
+      <text className="retired-branch__label" textAnchor="end" x={tip.x - 6} y={tip.y - 2}>{branch.name} · retired history</text>
+      <foreignObject className="branch-hover-card" x={cardX} y={cardY} width="220" height="112">
+        <div className="branch-hover-card__surface" xmlns="http://www.w3.org/1999/xhtml">
+          <strong>{branch.name} · Retired history</strong>
+          <span>{branch.contained ? 'fully contained in the integration spine' : 'kept for historical context'}</span>
+          <span>{branch.uniqueCommits} unique {branch.uniqueCommits === 1 ? 'commit' : 'commits'}</span>
+          <span>{branch.ref} · {branch.sha || 'unknown'}</span>
+        </div>
+      </foreignObject>
     </g>
   )
 }
@@ -326,7 +540,11 @@ function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosit
   const opacity = ageOpacity(branch)
   const commits = (branch.commits || []).slice(0, 5).reverse()
   const checks = branch.pullRequest?.checks
+  const checksPassed = checksFullyPassed(checks)
+  const passedCheckCount = (checks?.items || []).filter((check) => check.status === 'passed').length
   const checkItems = (checks?.items || []).slice(0, 8)
+  const conflictItems = (branch.conflictDetails?.files || []).slice(0, 5)
+  const conflictTotal = branch.conflictDetails?.total ?? conflictItems.length
   const checkLabel = checkProgressLabel(branch)
   const statusLabel = branch.conflict
     ? 'conflict'
@@ -339,7 +557,9 @@ function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosit
           : isOpenPullRequest ? checkLabel : null
   const labelX = tipX - 8
   const labelAnchor = 'end'
-  const cardHeight = checkItems.length ? 150 + checkItems.length * 13 : 132
+  const cardHeight = 132
+    + (checkItems.length ? 18 + checkItems.length * 13 : 0)
+    + (branch.conflict ? 28 + conflictItems.length * 13 : 0)
   const cardX = tipX < 250 ? clamp(tipX + 12, 12, 288) : clamp(tipX - 224, 12, 288)
   const cardY = clamp(tipY - 64, 12, 748 - cardHeight)
   const currentLabel = branch.sha
@@ -351,7 +571,7 @@ function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosit
 
   return (
     <g
-      className={`tree-branch ${branch.isCurrent ? 'tree-branch--current' : ''} ${branch.pullRequest ? 'tree-branch--pull-request' : ''} ${isOpenPullRequest ? 'tree-branch--pr-open' : ''} ${isMergedBranch ? 'tree-branch--merged' : ''} ${isGhostPullRequest ? 'tree-branch--pr-ghost' : ''} ${branch.pullRequest?.isDraft ? 'tree-branch--draft' : ''} ${branch.lifecycle === 'merging' ? 'tree-branch--merging' : ''} ${branch.lifecycle === 'closing' ? 'tree-branch--closing' : ''} ${branch.conflict ? 'tree-branch--conflict' : ''} ${currentTick && branch.isCurrent ? 'is-tick' : ''}`}
+      className={`tree-branch ${branch.isCurrent ? 'tree-branch--current' : ''} ${branch.pullRequest ? 'tree-branch--pull-request' : ''} ${isOpenPullRequest ? 'tree-branch--pr-open' : ''} ${isMergedBranch ? 'tree-branch--merged' : ''} ${isGhostPullRequest ? 'tree-branch--pr-ghost' : ''} ${branch.pullRequest?.isDraft ? 'tree-branch--draft' : ''} ${branch.lifecycle === 'merging' ? 'tree-branch--merging' : ''} ${branch.lifecycle === 'closing' ? 'tree-branch--closing' : ''} ${branch.conflict ? 'tree-branch--conflict' : ''} ${passedCheckCount ? 'tree-branch--checks-blooming' : ''} ${checksPassed ? 'tree-branch--checks-passed' : ''} ${currentTick && branch.isCurrent ? 'is-tick' : ''}`}
       style={{
         '--branch-color': color,
         '--branch-opacity': opacity,
@@ -378,9 +598,12 @@ function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosit
         <title>{branch.isPullRequest ? `${branch.pullRequest.authorName} · PR #${branch.pullRequest.number}` : branch.sha || branch.name} · branch head</title>
       </circle>
       {(isOpenPullRequest || isMergedBranch) && (
-        <CheckRing checks={checks} color={isMergedBranch ? MERGED_COLOR : undefined} x={tipX} y={tipY} />
+        <>
+          <CheckRing checks={checks} color={isMergedBranch ? MERGED_COLOR : undefined} hidePassed x={tipX} y={tipY} />
+          <CheckBloom checks={checks} color={isMergedBranch ? MERGED_COLOR : undefined} x={tipX} y={tipY} />
+        </>
       )}
-      {branch.isCurrent && <circle className="current-ring" cx={tipX} cy={tipY} r={isOpenPullRequest ? 11.5 : 9} />}
+      {branch.isCurrent && <circle className="current-ring" cx={tipX} cy={tipY} r={passedCheckCount ? 16.5 : isOpenPullRequest ? 11.5 : 9} />}
       {branch.conflict && (
         <path className="conflict-mark" d={`M ${tipX - 5} ${tipY - 5} l 10 10 M ${tipX + 5} ${tipY - 5} l -10 10`} />
       )}
@@ -400,6 +623,22 @@ function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosit
           )}
           <span>{prSummary(branch)}</span>
           {branch.pullRequest?.title && <span className="branch-hover-card__pr-title">{branch.pullRequest.title}</span>}
+          {branch.conflict && (
+            <span className="branch-hover-card__conflicts">
+              <span className="branch-hover-card__section-title">merge conflict</span>
+              {conflictItems.map((file) => (
+                <span className="branch-hover-card__conflict" key={file.path}>
+                  <span>{file.path}</span>
+                  <span>{file.type}</span>
+                </span>
+              ))}
+              {conflictTotal > conflictItems.length && <span>+{conflictTotal - conflictItems.length} more files</span>}
+              {branch.conflictDetails?.status === 'clean' && <span>GitHub reports conflict · local refs merge cleanly</span>}
+              {(!branch.conflictDetails || branch.conflictDetails.status === 'unavailable') && (
+                <span>GitHub reports conflict · file details unavailable locally</span>
+              )}
+            </span>
+          )}
           <span>{checkSummary(branch.pullRequest?.checks)}</span>
           {checkItems.length > 0 && (
             <span className="branch-hover-card__checks">
@@ -421,10 +660,15 @@ function TreeBranch({ branch, currentTick, index, mergeSpinePosition, spinePosit
 }
 
 function GitTree({ state, currentTick, upstreamMovement }) {
-  const visibleBranches = state.branches.slice(0, 15)
+  const visibleBranches = state.branches
+    .filter((branch) => !branch.merged || branch.isCurrent || branch.isBase)
+    .slice(0, 15)
   const pullRequestBranches = selectPullRequestBranches(state.pullRequestBranches || [])
   const pullRequestBranchNames = new Set(pullRequestBranches.map((branch) => branch.name))
   const recentMerges = state.recentMerges || []
+  const production = state.landscape?.production || null
+  const retiredBranches = state.landscape?.retired || []
+  const integrationRole = state.landscape?.integration?.label || 'Integration'
   const base = state.remote?.base?.remoteRef || state.comparisonBase || state.base
   const baseAhead = state.remote?.base?.ahead || 0
   const baseIncoming = state.remote?.base?.behind || 0
@@ -454,7 +698,18 @@ function GitTree({ state, currentTick, upstreamMovement }) {
   const mergeDistances = recentMerges
     .map((merge) => merge.mergeDistance)
     .filter((distance) => Number.isFinite(distance) && distance >= 0)
-  const maxBaseDistance = Math.max(rememberedIncoming, baseCommits.length - 1, ...branchDistances, ...mergeDistances, 1)
+  const landscapeDistances = [
+    production?.mergeDistance,
+    ...retiredBranches.map((branch) => branch.mergeDistance),
+  ].filter((distance) => Number.isFinite(distance) && distance >= 0)
+  const maxBaseDistance = Math.max(
+    rememberedIncoming,
+    baseCommits.length - 1,
+    ...branchDistances,
+    ...mergeDistances,
+    ...landscapeDistances,
+    1,
+  )
   const spinePositionAtDistance = (distance) => {
     const ratio = Math.log1p(Math.max(0, distance)) / Math.log1p(maxBaseDistance)
     return 0.15 + ratio * 0.7
@@ -528,20 +783,6 @@ function GitTree({ state, currentTick, upstreamMovement }) {
               </circle>
             )
           })}
-          {recentMerges.map((merge, mergeIndex) => {
-            const point = basePointAt(merge.mergeDistance)
-            return (
-              <g className="recent-merge" key={`${merge.number}-${merge.mergeSha}`} style={{ '--branch-color': MERGED_COLOR }}>
-                <circle className="recent-merge__ring" cx={point.x} cy={point.y} r="4.2">
-                  <title>{merge.authorName} merged PR #{merge.number} · {merge.title}</title>
-                </circle>
-                <CheckRing checks={merge.checks} color={MERGED_COLOR} x={point.x} y={point.y} />
-                <text className="recent-merge__label" textAnchor="end" x={point.x - 7} y={point.y - 5 - (mergeIndex % 2) * 6}>
-                  merged · {merge.authorName} #{merge.number}
-                </text>
-              </g>
-            )
-          })}
           {currentOnSpine && (
             <g className={`spine-current-position ${baseFullySynced ? 'is-synced' : ''}`}>
               <title>Current: {state.current} at {currentBranch?.sha || baseBranch?.sha || 'unknown commit'}</title>
@@ -567,9 +808,18 @@ function GitTree({ state, currentTick, upstreamMovement }) {
             </g>
           )}
           <circle className="spine-root" cx="332" cy="62" r="3.3" />
-          <text x="344" y="57" textAnchor="start" className="base-label">{state.base} · {base} · {state.remote?.base?.remoteSha || baseBranch?.sha || 'unknown'}</text>
+          <text x="344" y="55" textAnchor="start" className="base-label">{state.base} · {integrationRole}</text>
+          <text x="344" y="66" textAnchor="start" className="base-source-label">{base} · {state.remote?.base?.remoteSha || baseBranch?.sha || 'unknown'}</text>
         </g>
 
+        {retiredBranches.map((branch, index) => (
+          <RetiredMarker
+            branch={branch}
+            index={index}
+            key={branch.name}
+            spinePosition={spinePositionAtDistance(branch.mergeDistance || 0)}
+          />
+        ))}
         {branches.map((branch, index) => (
           <TreeBranch
             branch={branch}
@@ -580,6 +830,19 @@ function GitTree({ state, currentTick, upstreamMovement }) {
             spinePosition={branchSpinePosition(branch, index)}
           />
         ))}
+        <ProductionLane
+          integrationName={state.base}
+          lane={production}
+          spinePosition={spinePositionAtDistance(production?.mergeDistance || 0)}
+        />
+        {recentMerges.map((merge, mergeIndex) => (
+          <MergedCheckpoint
+            key={`${merge.number}-${merge.mergeSha}`}
+            merge={merge}
+            mergeIndex={mergeIndex}
+            point={basePointAt(merge.mergeDistance)}
+          />
+        ))}
       </g>
     </svg>
   )
@@ -588,7 +851,7 @@ function GitTree({ state, currentTick, upstreamMovement }) {
 function EmptyState({ state }) {
   return (
     <div className="tree-state">
-      <span>Branch Organism</span>
+      <span>vertebrae</span>
       <p>{state.message || 'Choose a Git repository from the menu bar.'}</p>
     </div>
   )

@@ -1,7 +1,8 @@
 {
   "name": "branch-organism",
+  "productName": "vertebrae",
   "private": true,
-  "version": "0.20.1",
+  "version": "0.21.2",
   "description": "A minimal living Git branch overlay.",
   "main": "electron/main.cjs",
   "scripts": {
@@ -9,8 +10,8 @@
     "dev:web": "vite",
     "build": "vite build",
     "package:mac": "npm run package:mac:arm64",
-    "package:mac:arm64": "npm run build && electron-packager . 'Branch Organism' --platform=darwin --arch=arm64 --out=work/release --overwrite --prune=true --asar --app-bundle-id=com.branchorganism.app --icon=assets/BranchOrganism.icns --ignore='^/(work|outputs|tests|src|\\.github)(/|$)'",
-    "package:mac:universal": "npm run build && electron-packager . 'Branch Organism' --platform=darwin --arch=universal --out=work/release --overwrite --prune=true --asar --app-bundle-id=com.branchorganism.app --icon=assets/BranchOrganism.icns --ignore='^/(work|outputs|tests|src|\\.github)(/|$)'",
+    "package:mac:arm64": "npm run build && electron-packager . vertebrae --platform=darwin --arch=arm64 --out=work/release --overwrite --prune=true --asar --app-bundle-id=com.branchorganism.app --icon=assets/Vertebrae.icns --ignore='^/(work|outputs|tests|src|\\.github)(/|$)'",
+    "package:mac:universal": "npm run build && electron-packager . vertebrae --platform=darwin --arch=universal --out=work/release --overwrite --prune=true --asar --app-bundle-id=com.branchorganism.app --icon=assets/Vertebrae.icns --ignore='^/(work|outputs|tests|src|\\.github)(/|$)'",
     "package:share": "bash scripts/package-share.sh",
     "start": "electron .",
     "test:electron": "npm run build && electron tests/electron-smoke.cjs",
