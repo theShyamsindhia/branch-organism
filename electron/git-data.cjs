@@ -26,7 +26,7 @@ function git(repoPath, args, options = {}) {
   }
 }
 
-function readRepositoryFingerprint(inputPath, pullRequestState = { status: 'idle' }) {
+function readRepositoryFingerprint(inputPath, pullRequestState = { status: 'idle' }, landscapeConfiguration = {}) {
   const repoPath = resolveRepositoryPath(inputPath)
   if (!repoPath) return null
 
@@ -47,6 +47,9 @@ function readRepositoryFingerprint(inputPath, pullRequestState = { status: 'idle
     new Date().toISOString().slice(0, 10),
     pullRequestState.status || 'idle',
     pullRequestState.checkedAt || 0,
+    landscapeConfiguration.integration || null,
+    landscapeConfiguration.production ?? 'auto',
+    Array.isArray(landscapeConfiguration.retired) ? [...landscapeConfiguration.retired].sort() : 'auto',
   ])
 }
 
@@ -86,10 +89,42 @@ function selectVisibleBranches(branches, current, base, limit = MAX_BRANCHES) {
   return visible
 }
 
-function findBaseBranch(repoPath, current) {
-  const candidates = ['dev', 'develop', 'main', 'master']
+function localBranchExists(repoPath, name) {
+  return Boolean(name) && git(repoPath, ['show-ref', '--verify', '--quiet', `refs/heads/${name}`], { allowFailure: true }) !== null
+}
+
+function resolveNamedBranchRef(repoPath, name, { preferRemote = false } = {}) {
+  if (!name) return null
+  const candidates = preferRemote
+    ? [`origin/${name}`, name]
+    : [name, `origin/${name}`]
+  return candidates.find((candidate) => (
+    git(repoPath, ['rev-parse', '--verify', '--quiet', `${candidate}^{commit}`], { allowFailure: true })
+  )) || null
+}
+
+function getLandscapeBranchOptions(repoPath, current, landscapeConfiguration = {}) {
+  const configured = [
+    landscapeConfiguration.integration,
+    landscapeConfiguration.production,
+    ...(Array.isArray(landscapeConfiguration.retired) ? landscapeConfiguration.retired : []),
+  ]
+  const conventional = ['main', 'master', 'dev', 'develop', 'prd', 'prod', 'production', 'staging', 'stage', 'beta']
+  const candidates = [...configured, ...conventional].filter(Boolean)
+  const available = [...new Set(candidates)].filter((name) => resolveNamedBranchRef(repoPath, name))
+  return available.length ? available : [current].filter((name) => resolveNamedBranchRef(repoPath, name))
+}
+
+function findBaseBranch(repoPath, current, landscapeConfiguration = {}) {
+  const requested = landscapeConfiguration.integration
+  if (localBranchExists(repoPath, requested)) return requested
+
+  const remoteHead = git(repoPath, ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], { allowFailure: true })
+    ?.replace(/^origin\//, '')
+  const conventionalCurrent = ['main', 'master', 'dev', 'develop'].includes(current) ? current : null
+  const candidates = [remoteHead, 'main', 'master', conventionalCurrent, 'dev', 'develop']
   return candidates.find((name) => (
-    git(repoPath, ['show-ref', '--verify', '--quiet', `refs/heads/${name}`], { allowFailure: true }) !== null
+    localBranchExists(repoPath, name)
   )) || current
 }
 
@@ -115,14 +150,28 @@ function findGitHubCli() {
 }
 
 function summarizeCheckRollup(checks = []) {
-  return checks.reduce((summary, check) => {
-    const state = check.conclusion || check.state || check.status
+  const items = checks.map((check, index) => {
+    const state = String(check.conclusion || check.state || check.status || 'PENDING').toUpperCase()
+    const status = ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(state)
+      ? 'passed'
+      : ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(state)
+        ? 'failed'
+        : 'pending'
+
+    return {
+      name: check.name || check.context || `Check ${index + 1}`,
+      status,
+      workflow: check.workflowName || null,
+    }
+  })
+
+  return items.reduce((summary, check) => {
     summary.total += 1
-    if (['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(state)) summary.passed += 1
-    else if (['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(state)) summary.failed += 1
+    if (check.status === 'passed') summary.passed += 1
+    else if (check.status === 'failed') summary.failed += 1
     else summary.pending += 1
     return summary
-  }, { total: 0, passed: 0, failed: 0, pending: 0 })
+  }, { total: 0, passed: 0, failed: 0, pending: 0, items })
 }
 
 function getWatchedAuthor(author) {
@@ -134,7 +183,7 @@ function normalizePullRequest({ statusCheckRollup, ...pullRequest }) {
   const authorLogin = typeof pullRequest.author === 'string'
     ? pullRequest.author
     : pullRequest.author?.login || null
-  const authorName = getWatchedAuthor(authorLogin)
+  const authorName = getWatchedAuthor(authorLogin) || authorLogin
   const mergeCommitSha = typeof pullRequest.mergeCommit === 'string'
     ? pullRequest.mergeCommit
     : pullRequest.mergeCommit?.oid || null
@@ -143,16 +192,19 @@ function normalizePullRequest({ statusCheckRollup, ...pullRequest }) {
     subject: commit.subject || commit.messageHeadline || 'commit',
     timestamp: commit.timestamp || Math.floor(Date.parse(commit.committedDate || '') / 1000) || 0,
   }))
+  const checks = pullRequest.checks
+    ? { ...pullRequest.checks, items: pullRequest.checks.items || [] }
+    : summarizeCheckRollup(statusCheckRollup)
 
   return {
     ...pullRequest,
     authorLogin,
     authorName,
-    checks: pullRequest.checks || summarizeCheckRollup(statusCheckRollup),
+    checks,
     commits,
     headSha: pullRequest.headSha || pullRequest.headRefOid?.slice(0, 7) || commits.at(-1)?.sha || null,
     mergeCommitSha,
-    watched: Boolean(authorName),
+    watched: Boolean(authorLogin),
   }
 }
 
@@ -239,18 +291,49 @@ function reconcilePullRequestState(previousState, nextState, now = Date.now()) {
   return { ...nextState, transitions }
 }
 
-function checkMergeConflict(repoPath, baseRef, branchRef) {
-  if (!baseRef || !branchRef || baseRef === branchRef) return false
+function formatConflictType(type) {
+  const normalized = String(type || '').toLowerCase()
+  const labels = {
+    'add/add': 'both added',
+    content: 'content',
+    contents: 'content',
+    'directory/file': 'file / directory',
+    'file/directory': 'file / directory',
+    'modify/delete': 'modify / delete',
+    'rename/delete': 'rename / delete',
+    'rename/rename': 'both renamed',
+  }
+  return labels[normalized] || normalized.replaceAll('/', ' / ') || 'conflict'
+}
+
+function readMergeConflictDetails(repoPath, baseRef, branchRef) {
+  if (!baseRef || !branchRef || baseRef === branchRef) return { files: [], status: 'clean', total: 0 }
 
   try {
-    execFileSync('git', ['-C', repoPath, 'merge-tree', '--write-tree', baseRef, branchRef], {
+    execFileSync('git', ['-C', repoPath, 'merge-tree', '--write-tree', '--name-only', baseRef, branchRef], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 15000,
     })
-    return false
+    return { files: [], status: 'clean', total: 0 }
   } catch (error) {
-    const output = `${error.stdout || ''}\n${error.stderr || ''}`
-    return /CONFLICT|<<<<<<<|changed in both/i.test(output) ? true : null
+    const output = `${error.stdout || ''}\n${error.stderr || ''}`.replaceAll('\r', '')
+    if (!/CONFLICT|<<<<<<<|changed in both/i.test(output)) {
+      return { files: [], status: 'unavailable', total: null }
+    }
+
+    const [pathSection = '', ...messageSections] = output.split(/\n\s*\n/)
+    const paths = pathSection.split('\n').slice(1).map((value) => value.trim()).filter(Boolean)
+    const messages = messageSections.join('\n').split('\n').flatMap((line) => {
+      const match = line.match(/^CONFLICT \(([^)]+)\):\s*(.+)$/i)
+      return match ? [{ detail: match[2], type: formatConflictType(match[1]) }] : []
+    })
+    const files = [...new Set(paths)].map((conflictPath) => ({
+      path: conflictPath,
+      type: messages.find((message) => message.detail.includes(conflictPath))?.type || messages[0]?.type || 'conflict',
+    }))
+
+    return { files, status: 'conflicting', total: files.length }
   }
 }
 
@@ -378,9 +461,9 @@ function fetchRemote(repoPath) {
   })
 }
 
-function fetchPullRequestHeads(repoPath, pullRequestState) {
+function fetchPullRequestHeads(repoPath, pullRequestState, landscapeConfiguration = {}) {
   const current = git(repoPath, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { allowFailure: true }) || 'detached'
-  const base = findBaseBranch(repoPath, current)
+  const base = findBaseBranch(repoPath, current, landscapeConfiguration)
   const pullRequests = (pullRequestState.pullRequests || [])
     .filter((pullRequest) => pullRequest.watched && pullRequest.state === 'OPEN' && pullRequest.baseRefName === base)
     .slice(0, 12)
@@ -432,6 +515,62 @@ function relativeActivity(timestamp) {
   return { ageDays, relative: ageDays === 0 ? 'today' : `${ageDays} days ago` }
 }
 
+function readProductionLane(repoPath, comparisonBase, productionName) {
+  const productionRef = resolveNamedBranchRef(repoPath, productionName, { preferRemote: true })
+  if (!comparisonBase || !productionRef || productionRef === comparisonBase) return null
+
+  const relation = getRelation(repoPath, comparisonBase, productionRef)
+  if (!relation) return null
+  const mergeBase = git(repoPath, ['merge-base', comparisonBase, productionRef], { allowFailure: true })
+  const distance = mergeBase
+    ? git(repoPath, ['rev-list', '--first-parent', '--count', `${mergeBase}..${comparisonBase}`], { allowFailure: true })
+    : null
+  const integrationAhead = relation.ahead
+  const productionAhead = relation.behind
+  const status = integrationAhead > 0 && productionAhead > 0
+    ? 'drift'
+    : integrationAhead > 0
+      ? 'awaiting-promotion'
+      : productionAhead > 0
+        ? 'production-ahead'
+        : 'synced'
+
+  return {
+    commits: readCommits(repoPath, `${comparisonBase}..${productionRef}`, Math.min(productionAhead, 4)),
+    integrationAhead,
+    mergeBaseSha: mergeBase ? git(repoPath, ['rev-parse', '--short', mergeBase], { allowFailure: true }) : null,
+    mergeDistance: distance === null ? 0 : Number(distance),
+    name: productionName,
+    productionAhead,
+    ref: productionRef,
+    sha: git(repoPath, ['rev-parse', '--short', productionRef], { allowFailure: true }),
+    status,
+  }
+}
+
+function readRetiredBranch(repoPath, comparisonBase, name) {
+  const ref = resolveNamedBranchRef(repoPath, name, { preferRemote: true })
+  if (!comparisonBase || !ref || ref === comparisonBase) return null
+
+  const relation = getRelation(repoPath, comparisonBase, ref)
+  if (!relation) return null
+  const contained = git(repoPath, ['merge-base', '--is-ancestor', ref, comparisonBase], { allowFailure: true }) !== null
+  const mergeDistance = distanceFromBaseHead(
+    repoPath,
+    comparisonBase,
+    git(repoPath, ['rev-parse', ref], { allowFailure: true }),
+  )
+
+  return {
+    contained,
+    mergeDistance: mergeDistance ?? 0,
+    name,
+    ref,
+    sha: git(repoPath, ['rev-parse', '--short', ref], { allowFailure: true }),
+    uniqueCommits: relation.behind,
+  }
+}
+
 function readPullRequestBranch(repoPath, comparisonBase, current, pullRequest) {
   const branchRef = resolvePullRequestRef(repoPath, pullRequest)
   const counts = branchRef
@@ -455,6 +594,9 @@ function readPullRequestBranch(repoPath, comparisonBase, current, pullRequest) {
   const conflict = pullRequest.state === 'OPEN' && (
     pullRequest.mergeable === 'CONFLICTING' || pullRequest.mergeStateStatus === 'DIRTY'
   )
+  const conflictDetails = conflict && branchRef
+    ? readMergeConflictDetails(repoPath, comparisonBase, branchRef)
+    : null
 
   return {
     name: pullRequest.headRefName,
@@ -467,6 +609,7 @@ function readPullRequestBranch(repoPath, comparisonBase, current, pullRequest) {
     behind,
     commits,
     conflict,
+    conflictDetails,
     conflictSource: conflict ? 'github' : null,
     isBase: false,
     isCurrent: pullRequest.headRefName === current,
@@ -480,16 +623,44 @@ function readPullRequestBranch(repoPath, comparisonBase, current, pullRequest) {
   }
 }
 
-function readBranchState(inputPath, pullRequestState = { status: 'idle', pullRequests: [] }) {
+function readBranchState(inputPath, pullRequestState = { status: 'idle', pullRequests: [] }, landscapeConfiguration = {}) {
   const requestedPath = path.resolve(inputPath || process.cwd())
 
   try {
     const repoPath = resolveRepositoryPath(requestedPath)
     if (!repoPath) throw new Error('No Git repository found.')
     const current = git(repoPath, ['symbolic-ref', '--quiet', '--short', 'HEAD'], { allowFailure: true }) || 'detached'
-    const base = findBaseBranch(repoPath, current)
+    const availableBranches = getLandscapeBranchOptions(repoPath, current, landscapeConfiguration)
+    const base = findBaseBranch(repoPath, current, landscapeConfiguration)
     const remote = readRemoteState(repoPath, current, base)
     const comparisonBase = remote.base?.remoteRef || base
+    const productionWasConfigured = Object.prototype.hasOwnProperty.call(landscapeConfiguration, 'production')
+    const productionName = landscapeConfiguration.production === null
+      ? null
+      : (
+          landscapeConfiguration.production && resolveNamedBranchRef(repoPath, landscapeConfiguration.production)
+            ? landscapeConfiguration.production
+            : productionWasConfigured
+              ? null
+              : ['prd', 'prod', 'production'].find((name) => name !== base && resolveNamedBranchRef(repoPath, name)) || null
+        )
+    const configuredRetired = Array.isArray(landscapeConfiguration.retired)
+      ? landscapeConfiguration.retired
+      : null
+    const retiredNames = (configuredRetired || ['dev', 'develop'].filter((name) => {
+      const ref = resolveNamedBranchRef(repoPath, name, { preferRemote: true })
+      return name !== base
+        && name !== productionName
+        && ref
+        && git(repoPath, ['merge-base', '--is-ancestor', ref, comparisonBase], { allowFailure: true }) !== null
+    }))
+      .filter((name, index, all) => (
+        name !== base
+        && name !== productionName
+        && resolveNamedBranchRef(repoPath, name)
+        && all.indexOf(name) === index
+      ))
+    const retiredNameSet = new Set(retiredNames)
     const raw = git(repoPath, [
       'for-each-ref',
       '--sort=-committerdate',
@@ -512,7 +683,21 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
 
     const pullRequests = (pullRequestState.pullRequests || []).map(normalizePullRequest)
     const pullRequestTransitions = (pullRequestState.transitions || []).map(normalizePullRequest)
-    const branches = selectVisibleBranches(allBranches, current, base).map((branch) => {
+    const unmergedBranchNames = new Set((git(repoPath, [
+      'branch',
+      '--format=%(refname:short)',
+      '--no-merged', comparisonBase,
+    ], { allowFailure: true }) || '').split('\n').filter(Boolean))
+    const activeBranches = allBranches.filter((branch) => (
+      branch.name === base
+      || branch.name === current
+      || (
+        branch.name !== productionName
+        && !retiredNameSet.has(branch.name)
+        && unmergedBranchNames.has(branch.name)
+      )
+    ))
+    const branches = selectVisibleBranches(activeBranches, current, base).map((branch) => {
       const counts = comparisonBase && branch.name !== base
         ? git(repoPath, ['rev-list', '--left-right', '--count', `${comparisonBase}...${branch.name}`], { allowFailure: true })
         : '0\t0'
@@ -525,10 +710,11 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       const remoteConflict = pullRequest?.state === 'OPEN' && (
         pullRequest.mergeable === 'CONFLICTING' || pullRequest.mergeStateStatus === 'DIRTY'
       )
-      const localConflict = branch.name === current && !merged
-        ? checkMergeConflict(repoPath, comparisonBase, branch.name)
+      const conflictDetails = remoteConflict || (branch.name === current && !merged)
+        ? readMergeConflictDetails(repoPath, comparisonBase, branch.name)
         : null
-      const conflict = remoteConflict || localConflict === true
+      const localConflict = conflictDetails?.status === 'conflicting'
+      const conflict = remoteConflict || localConflict
       const ageDays = Math.max(0, Math.floor((Date.now() / 1000 - branch.timestamp) / 86400))
       const commits = branch.name === base
         ? []
@@ -549,7 +735,8 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
         behind,
         commits,
         conflict,
-        conflictSource: remoteConflict ? 'github' : localConflict === true ? 'local' : null,
+        conflictDetails: conflict ? conflictDetails : null,
+        conflictSource: remoteConflict ? 'github' : localConflict ? 'local' : null,
         merged,
         mergeBaseSha,
         pullRequest: pullRequest || null,
@@ -559,6 +746,7 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       }
     })
 
+    const localBranchNames = new Set(allBranches.map((branch) => branch.name))
     const pullRequestBranches = [...pullRequests, ...pullRequestTransitions]
       .filter((pullRequest) => (
         pullRequest.watched
@@ -566,7 +754,10 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
         && (pullRequest.state === 'OPEN' || pullRequest.lifecycle)
       ))
       .filter((pullRequest, index, all) => all.findIndex((candidate) => candidate.number === pullRequest.number) === index)
-      .map((pullRequest) => readPullRequestBranch(repoPath, comparisonBase, current, pullRequest))
+      .map((pullRequest) => ({
+        ...readPullRequestBranch(repoPath, comparisonBase, current, pullRequest),
+        hasLocalBranch: localBranchNames.has(pullRequest.headRefName),
+      }))
     const recentMerges = pullRequests
       .filter((pullRequest) => (
         pullRequest.watched
@@ -579,12 +770,18 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       .map((pullRequest) => ({
         authorLogin: pullRequest.authorLogin,
         authorName: pullRequest.authorName,
+        checks: pullRequest.checks,
         mergeDistance: distanceFromBaseHead(repoPath, comparisonBase, pullRequest.mergeCommitSha) ?? 0,
         mergeSha: pullRequest.mergeCommitSha?.slice(0, 7) || null,
         mergedAt: pullRequest.mergedAt,
         number: pullRequest.number,
         title: pullRequest.title,
       }))
+    const production = readProductionLane(repoPath, comparisonBase, productionName)
+    const retired = retiredNames
+      .filter((name) => name !== current)
+      .map((name) => readRetiredBranch(repoPath, comparisonBase, name))
+      .filter(Boolean)
 
     return {
       status: branches.length ? 'ready' : 'empty',
@@ -594,6 +791,15 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       base,
       comparisonBase,
       baseCommits: readCommits(repoPath, comparisonBase, 9, { firstParent: true }),
+      landscape: {
+        availableBranches,
+        integration: {
+          label: base === 'main' && production ? 'Beta / Integration' : 'Integration',
+          name: base,
+        },
+        production,
+        retired,
+      },
       remote,
       github: {
         status: pullRequestState.status,

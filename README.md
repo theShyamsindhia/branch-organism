@@ -1,34 +1,89 @@
-# Branch Organism
+<p align="center">
+  <img src="assets/branch-organism-icon.png" width="152" alt="vertebrae app icon: an organic Git tree" />
+</p>
 
-A transparent, always-on-top Git tree. Its resting view reduces the repository to seven meaningful branches:
+<h1 align="center">vertebrae</h1>
 
-- `origin/dev` descends from a free latest-history tip into an older-history root attached to the lower-right edge;
-- every branch grows leftward from its real merge-base ring, spaced while preserving ancestry order;
-- branch length follows commits ahead, with real commit nodes and a short head SHA;
-- current, upstream movement, and conflicts speak loudly while healthy or stale refs recede;
-- conflicts use a broken rust stem and a clean cross at the branch head;
-- open PRs from Raj (`xrehpicx`), Arnav (`AR13570`), Bishal (`ZenderGoD`), and Sammy (`ungaaaabungaaa`) replace their duplicate branch with a dashed ghost limb and real PR commit nodes;
-- merged PR limbs contract into their recorded merge checkpoint; closed-unmerged limbs only fade, while recent merges leave quiet rings on the spine;
-- hovering a branch reveals its full name, PR state/title, CI rollup, ahead/behind counts, and last activity;
-- a checked-out ref at the base head collapses onto the same spine commit instead of inventing divergence;
-- the current marker briefly ticks every four seconds;
-- a small fading gripper repositions the tree, which snaps to the right edge and remembers its position;
-- GitHub merge state comes from `gh`, with a local `git merge-tree` fallback;
-- local refs refresh every five seconds and remotes fetch every minute.
+<p align="center">
+  <strong>Git, if it stopped hiding the interesting parts in terminal output.</strong><br />
+  A transparent macOS overlay that turns repository state into a living branch landscape.
+</p>
 
-Git topology snapshots run in a background utility process, so large repositories cannot block the tray or window movement. Unchanged refs reuse the last snapshot, and remote refresh requests are queued rather than dropped.
+<p align="center">
+  <img src="assets/readme/landscape-dark.png" width="560" alt="vertebrae showing a Git integration spine, production lane, pull requests, checks, and retired history on a dark background" />
+</p>
 
-Watched PR heads are fetched into the app-owned `refs/branch-organism/pr/*` namespace for exact ancestry without creating, checking out, or modifying working branches.
+> The botany is decorative. The ancestry is not.
 
-Remote refs refresh once a minute. When the tracked base branch falls behind its remote, a faint dashed ghost curves from the local checkpoint to the newer upstream head. It disappears once the two refs are synced.
+## The idea
 
-The current marker is anchored to the checked-out commit and prints its short SHA. Branch ahead/behind counts stay in hover details so they cannot be mistaken for the current position.
+Git already knows the shape of a project: which commits share an ancestor, which branches have drifted, which pull requests are healthy, and which environment is quietly living in its own timeline. We normally ask for that shape through tables, badges, or an ASCII graph that looks like a subway map designed during an incident.
 
-Branches leave the spine at stable organic angles so the topology stays open and readable.
+I built **vertebrae** to expose that hidden coordination system without opening another dashboard. The repository becomes an organism at the edge of the screen: integration is the spine, divergent work grows outward, checks open as petals, and merged decisions settle back into history.
 
-Branch junctions come from each ref's real merge-base with the tracked remote base. Divergent length follows commits ahead; zero-ahead refs collapse into quiet buds at their actual ancestor. The overlay remembers one previous upstream checkpoint so the latest remote movement remains visible after sync.
+This is not a metaphor pasted over arbitrary data. Every visible relationship comes from Git topology or GitHub state.
 
-The menu-bar organism is the control surface. Click it once to show or hide the tree; right-click it to choose a repository, fetch immediately, open its GitHub page, or quit. The chosen folder is remembered on relaunch.
+## What you are actually looking at
+
+| Visible form | Underlying fact |
+| --- | --- |
+| Spine | The selected integration ref, usually `main` and preferably `origin/main` |
+| Junction | The real `git merge-base` between a branch and the integration ref |
+| Branch length | Commits unique to that ref, derived from `rev-list` |
+| Position along the spine | Distance from the integration head to the branch point |
+| Dashed ghost limb | A remote-only PR head or remembered upstream movement |
+| Yellow branch | An open pull request |
+| Petal | One passing GitHub check |
+| Remaining ring segment | A pending or failing check that has not opened yet |
+| Rust fracture | A merge conflict, with affected files available on hover |
+| Purple flower | A merged pull request and its completed checks |
+| Production lane | Honest divergence between integration and `prd`, `prod`, or `production` |
+| Retired scar | A contained historical ref such as `dev`, preserved without pretending it is active work |
+
+If two refs are synchronized, vertebrae puts them at the same checkpoint. If `main` and `prd` each contain unique commits, it shows the split instead of drawing a reassuring lie.
+
+## The Fanshawe context
+
+In the context of my work at **Fanshawe**, vertebrae is a study in exposing hidden systems.
+
+A repository is a social system wearing a filesystem costume. The commands are easy to teach; the harder part is seeing the consequences between them—where work began, what changed upstream, whose pull request is waiting, and whether “almost merged” means one pending check or a conflict nobody has opened yet.
+
+The project asks a broader interface question:
+
+> What happens when infrastructure stops reporting itself as a list and starts revealing its behaviour as a shape?
+
+That makes vertebrae useful as both a working Git companion and a conceptual representation of collaborative software development: distributed decisions made spatial, temporal, and legible.
+
+## One topology, any surface
+
+The overlay has no canvas of its own. It sits over the work, so its visual system has to survive both light and dark environments without turning into a sticker.
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="assets/readme/landscape-light.png" alt="The vertebrae Git landscape over a light background" />
+    </td>
+    <td width="50%">
+      <img src="assets/readme/landscape-dark.png" alt="The same vertebrae Git landscape over a dark background" />
+    </td>
+  </tr>
+</table>
+
+Passed checks bloom individually. Pending and failing checks keep their positions in the ring; the final pass completes the flower. The current ref ticks briefly every four seconds—not because Git needs drama, but because `HEAD` deserves to admit where it is.
+
+## How it works
+
+vertebrae does **not** scrape the printed output of `git log --graph`. It lays out the topology itself:
+
+- `git for-each-ref` supplies local refs and activity;
+- `git merge-base` anchors every real branch junction;
+- `git rev-list --left-right --count A...B` supplies ahead/behind relationships;
+- tracked remote refs reveal upstream movement and incoming commits;
+- `gh` supplies pull requests, authors, mergeability, check rollups, and recent merges;
+- open PR heads are fetched into the app-owned `refs/branch-organism/pr/*` namespace, never checked out into the working tree;
+- Git snapshots run in a background utility process, with local state sampled every five seconds and remotes refreshed every minute.
+
+Unchanged refs reuse the previous snapshot, and remote refreshes are queued rather than stacked. The overlay stays movable even when the repository is large or the network is having a personality.
 
 ## Run it
 
@@ -38,18 +93,51 @@ npm run build
 npm start -- --repo=/absolute/path/to/your/repository
 ```
 
-For renderer development with the included specimen data:
+You can also set the repository through `BRANCH_ORGANISM_REPO`, or choose any folder inside a Git repository from the menu-bar control.
+
+For renderer development with specimen data:
 
 ```bash
 npm run dev:web
 ```
 
-For live Electron development against a repository:
+For live Electron development:
 
 ```bash
 BRANCH_ORGANISM_REPO=/absolute/path/to/repository npm run dev
 ```
 
-Press `Command/Ctrl + Shift + B` to hide or reveal the overlay. It is intentionally click-through and appears on every workspace.
+Press <kbd>Command</kbd>/<kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd> to hide or reveal the overlay.
 
-Choose the tracked folder from the menu-bar control, pass `--repo=/absolute/path`, or set `BRANCH_ORGANISM_REPO`. The base branch fallback order is `dev`, `develop`, `main`, then `master`. The tree prefers `origin/<base>` before other configured upstreams.
+## Build the Mac app
+
+```bash
+npm run package:share
+```
+
+This produces a Universal `.dmg` and `.zip` in `work/share`, compatible with Apple Silicon and Intel Macs. The recipient can drag **vertebrae** into Applications and choose the repository they want to observe; they do not need Node.js or this source tree.
+
+### Requirements
+
+- **Git** is required.
+- **GitHub CLI** is optional, but enables PR branches, named checks, merge conflicts, and recent merge activity. Install it from [cli.github.com](https://cli.github.com/) and run `gh auth login` once.
+- Private repositories require the same remote access they normally use.
+
+Local builds are ad-hoc signed but not notarized. macOS may require a Control-click → **Open** on first launch. Distribution without that step requires an Apple Developer ID and notarization.
+
+## Control surface
+
+The menu-bar organism can:
+
+- show or hide the overlay;
+- choose and remember a repository;
+- fetch immediately;
+- open the remote on GitHub;
+- assign the integration spine, production lane, and retired refs per repository;
+- dock the tree to the right edge.
+
+The small fading circle is the gripper. Drag it to move the organism; bring it near the right edge and it settles there.
+
+---
+
+vertebrae does not tell you what to do with the repository. It shows the system you are already inside.

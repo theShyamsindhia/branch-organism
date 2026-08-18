@@ -6,7 +6,7 @@ const path = require('node:path')
 const test = require('node:test')
 const { fetchRemote, getRemoteWebUrl, getWatchedAuthor, readBranchState, readRepositoryFingerprint, reconcilePullRequestState, resolveRepositoryPath, selectVisibleBranches, summarizeCheckRollup } = require('../electron/git-data.cjs')
 const { createRefreshQueue } = require('../electron/refresh-queue.cjs')
-const { clampWindowX, clampWindowY, isNearRightEdge, settleWindowBounds } = require('../electron/window-layout.cjs')
+const { clampWindowX, clampWindowY, isNearRightEdge, isPointInsideWindowRegion, settleWindowBounds } = require('../electron/window-layout.cjs')
 
 function run(repoPath, args) {
   return execFileSync('git', ['-C', repoPath, ...args], { encoding: 'utf8' }).trim()
@@ -45,6 +45,15 @@ test('keeps saved windows inside the current display', () => {
     settleWindowBounds({ x: 1900, y: -400, width: 540, height: 820 }, workArea),
     { docked: true, x: 820, y: 24 },
   )
+})
+
+test('detects the gripper inside a click-through window', () => {
+  const windowBounds = { x: 1260, y: 197, width: 540, height: 820 }
+  const gripperBounds = { x: 492, y: 758, width: 44, height: 44 }
+
+  assert.equal(isPointInsideWindowRegion({ x: 1774, y: 977 }, windowBounds, gripperBounds), true)
+  assert.equal(isPointInsideWindowRegion({ x: 1700, y: 977 }, windowBounds, gripperBounds), false)
+  assert.equal(isPointInsideWindowRegion({ x: 1774, y: 900 }, windowBounds, gripperBounds), false)
 })
 
 test('preserves a queued remote refresh while a local refresh is running', async () => {
@@ -124,11 +133,22 @@ test('normalizes GitHub remotes into browser URLs', () => {
 
 test('summarizes GitHub check rollups for branch hover details', () => {
   assert.deepEqual(summarizeCheckRollup([
-    { status: 'COMPLETED', conclusion: 'SUCCESS' },
-    { status: 'COMPLETED', conclusion: 'FAILURE' },
-    { status: 'IN_PROGRESS', conclusion: '' },
-    { state: 'SUCCESS' },
-  ]), { total: 4, passed: 2, failed: 1, pending: 1 })
+    { name: 'Build', status: 'COMPLETED', conclusion: 'SUCCESS', workflowName: 'CI' },
+    { name: 'Lint', status: 'COMPLETED', conclusion: 'FAILURE' },
+    { name: 'Preview', status: 'IN_PROGRESS', conclusion: '' },
+    { context: 'deploy', state: 'SUCCESS' },
+  ]), {
+    total: 4,
+    passed: 2,
+    failed: 1,
+    pending: 1,
+    items: [
+      { name: 'Build', status: 'passed', workflow: 'CI' },
+      { name: 'Lint', status: 'failed', workflow: null },
+      { name: 'Preview', status: 'pending', workflow: null },
+      { name: 'deploy', status: 'passed', workflow: null },
+    ],
+  })
 })
 
 test('maps the monitored PR authors to their display names', () => {
@@ -137,6 +157,36 @@ test('maps the monitored PR authors to their display names', () => {
   assert.equal(getWatchedAuthor('ZenderGoD'), 'Bishal')
   assert.equal(getWatchedAuthor('ungaaaabungaaa'), 'Sammy')
   assert.equal(getWatchedAuthor('someone-else'), null)
+})
+
+test('shows PRs from GitHub authors outside the original team', (context) => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'branch-organism-generic-pr-'))
+  context.after(() => fs.rmSync(repoPath, { recursive: true, force: true }))
+
+  run(repoPath, ['init', '-b', 'main'])
+  run(repoPath, ['config', 'user.name', 'Branch Test'])
+  run(repoPath, ['config', 'user.email', 'branch@test.invalid'])
+  fs.writeFileSync(path.join(repoPath, 'seed.txt'), 'seed\n')
+  run(repoPath, ['add', 'seed.txt'])
+  run(repoPath, ['commit', '-m', 'seed'])
+  const sha = run(repoPath, ['rev-parse', 'HEAD'])
+
+  const state = readBranchState(repoPath, {
+    status: 'ready',
+    pullRequests: [{
+      author: { login: 'octofriend' },
+      baseRefName: 'main',
+      commits: [{ oid: sha, messageHeadline: 'shared branch' }],
+      headRefName: 'friend/shared-branch',
+      headRefOid: sha,
+      mergeable: 'MERGEABLE',
+      number: 7,
+      state: 'OPEN',
+      updatedAt: new Date().toISOString(),
+    }],
+  })
+
+  assert.equal(state.pullRequestBranches[0].pullRequest.authorName, 'octofriend')
 })
 
 test('detects watched PR merge and close transitions', () => {
@@ -183,9 +233,13 @@ test('uses GitHub mergeability to mark PR conflicts', (context) => {
   run(repoPath, ['add', 'seed.txt'])
   run(repoPath, ['commit', '-m', 'seed'])
   run(repoPath, ['checkout', '-b', 'feature/conflict'])
-  fs.writeFileSync(path.join(repoPath, 'feature.txt'), 'feature\n')
-  run(repoPath, ['add', 'feature.txt'])
+  fs.writeFileSync(path.join(repoPath, 'seed.txt'), 'feature\n')
+  run(repoPath, ['add', 'seed.txt'])
   run(repoPath, ['commit', '-m', 'feature'])
+  run(repoPath, ['checkout', 'dev'])
+  fs.writeFileSync(path.join(repoPath, 'seed.txt'), 'dev\n')
+  run(repoPath, ['add', 'seed.txt'])
+  run(repoPath, ['commit', '-m', 'dev'])
 
   const state = readBranchState(repoPath, {
     status: 'ready',
@@ -207,10 +261,80 @@ test('uses GitHub mergeability to mark PR conflicts', (context) => {
 
   assert.equal(branch.conflict, true)
   assert.equal(branch.conflictSource, 'github')
+  assert.deepEqual(branch.conflictDetails, {
+    files: [{ path: 'seed.txt', type: 'content' }],
+    status: 'conflicting',
+    total: 1,
+  })
   assert.equal(branch.pullRequest.number, 82)
   assert.equal(pullRequestBranch.isPullRequest, true)
+  assert.equal(pullRequestBranch.hasLocalBranch, true)
   assert.equal(pullRequestBranch.pullRequest.authorName, 'Raj')
   assert.equal(pullRequestBranch.commits[0].subject, 'feature')
+  assert.deepEqual(pullRequestBranch.conflictDetails, branch.conflictDetails)
+})
+
+test('models integration, production, and retired branches without merged canopy noise', (context) => {
+  const rootPath = fs.mkdtempSync(path.join(os.tmpdir(), 'vertebrae-landscape-'))
+  const remotePath = path.join(rootPath, 'remote.git')
+  const repoPath = path.join(rootPath, 'local')
+  context.after(() => fs.rmSync(rootPath, { recursive: true, force: true }))
+
+  fs.mkdirSync(repoPath)
+  run(rootPath, ['init', '--bare', remotePath])
+  run(repoPath, ['init', '-b', 'main'])
+  run(repoPath, ['config', 'user.name', 'Landscape Test'])
+  run(repoPath, ['config', 'user.email', 'landscape@test.invalid'])
+  fs.writeFileSync(path.join(repoPath, 'seed.txt'), 'seed\n')
+  run(repoPath, ['add', 'seed.txt'])
+  run(repoPath, ['commit', '-m', 'seed'])
+  run(repoPath, ['branch', 'dev'])
+  run(repoPath, ['switch', '-c', 'prd'])
+  fs.writeFileSync(path.join(repoPath, 'production-one.txt'), 'production one\n')
+  run(repoPath, ['add', 'production-one.txt'])
+  run(repoPath, ['commit', '-m', 'production one'])
+  fs.writeFileSync(path.join(repoPath, 'production-two.txt'), 'production two\n')
+  run(repoPath, ['add', 'production-two.txt'])
+  run(repoPath, ['commit', '-m', 'production two'])
+  run(repoPath, ['switch', 'main'])
+  fs.writeFileSync(path.join(repoPath, 'integration.txt'), 'integration\n')
+  run(repoPath, ['add', 'integration.txt'])
+  run(repoPath, ['commit', '-m', 'integration'])
+  run(repoPath, ['branch', 'feature/already-merged'])
+  run(repoPath, ['switch', '-c', 'feature/active'])
+  fs.writeFileSync(path.join(repoPath, 'active.txt'), 'active\n')
+  run(repoPath, ['add', 'active.txt'])
+  run(repoPath, ['commit', '-m', 'active feature'])
+  run(repoPath, ['remote', 'add', 'origin', remotePath])
+  run(repoPath, ['push', 'origin', 'main', 'dev', 'prd'])
+  run(repoPath, ['branch', '-D', 'prd'])
+
+  const configuration = { integration: 'main', production: 'prd', retired: ['dev'] }
+  const state = readBranchState(repoPath, { status: 'idle', pullRequests: [] }, configuration)
+  const automaticState = readBranchState(repoPath)
+  const branchNames = state.branches.map((branch) => branch.name)
+
+  assert.equal(state.base, 'main')
+  assert.equal(automaticState.base, 'main')
+  assert.equal(automaticState.landscape.production.name, 'prd')
+  assert.equal(automaticState.landscape.retired[0].name, 'dev')
+  assert.deepEqual(state.landscape.integration, { label: 'Beta / Integration', name: 'main' })
+  assert.equal(state.landscape.production.ref, 'origin/prd')
+  assert.equal(state.landscape.production.status, 'drift')
+  assert.equal(state.landscape.production.integrationAhead, 1)
+  assert.equal(state.landscape.production.productionAhead, 2)
+  assert.deepEqual(state.landscape.retired.map((branch) => ({ contained: branch.contained, name: branch.name, uniqueCommits: branch.uniqueCommits })), [
+    { contained: true, name: 'dev', uniqueCommits: 0 },
+  ])
+  assert.ok(branchNames.includes('main'))
+  assert.ok(branchNames.includes('feature/active'))
+  assert.ok(!branchNames.includes('feature/already-merged'))
+  assert.ok(!branchNames.includes('dev'))
+  assert.ok(!branchNames.includes('prd'))
+  assert.notEqual(
+    readRepositoryFingerprint(repoPath, { status: 'idle' }, configuration),
+    readRepositoryFingerprint(repoPath, { status: 'idle' }, { integration: 'dev' }),
+  )
 })
 
 test('fetches and describes incoming upstream changes', async (context) => {

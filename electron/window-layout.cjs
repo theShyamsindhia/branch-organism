@@ -30,10 +30,22 @@ function settleWindowBounds(bounds, workArea) {
   }
 }
 
+function isPointInsideWindowRegion(point, windowBounds, region) {
+  if (!point || !windowBounds || !region) return false
+  const left = windowBounds.x + region.x
+  const top = windowBounds.y + region.y
+
+  return point.x >= left
+    && point.x <= left + region.width
+    && point.y >= top
+    && point.y <= top + region.height
+}
+
 module.exports = {
   RIGHT_SNAP_DISTANCE,
   clampWindowX,
   clampWindowY,
   isNearRightEdge,
+  isPointInsideWindowRegion,
   settleWindowBounds,
 }
