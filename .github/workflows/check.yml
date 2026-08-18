@@ -22,5 +22,5 @@ jobs:
       - run: npm run check
       - run: npm run test:electron
       - run: npm run package:mac
-      - run: codesign --force --deep --sign - "work/release/Branch Organism-darwin-arm64/Branch Organism.app"
-      - run: codesign --verify --deep --strict "work/release/Branch Organism-darwin-arm64/Branch Organism.app"
+      - run: codesign --force --deep --sign - "work/release/vertebrae-darwin-arm64/vertebrae.app"
+      - run: codesign --verify --deep --strict "work/release/vertebrae-darwin-arm64/vertebrae.app"
