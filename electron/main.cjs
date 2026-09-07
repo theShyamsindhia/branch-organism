@@ -26,6 +26,7 @@ let positioningWindow = false
 let movingWindow = false
 let mousePassthrough = true
 let gripperBounds
+let interactiveBounds = []
 let gripperHitTestTimer
 let gitWorker
 let workerRequestId = 0
@@ -223,12 +224,12 @@ function setMousePassthrough(ignore) {
 
 function updateGripperInteractivity() {
   if (!overlayWindow || overlayWindow.isDestroyed() || !overlayWindow.isVisible() || movingWindow) return
-  const overGripper = isPointInsideWindowRegion(
-    screen.getCursorScreenPoint(),
-    overlayWindow.getBounds(),
-    gripperBounds,
-  )
-  setMousePassthrough(!overGripper)
+  const cursor = screen.getCursorScreenPoint()
+  const windowBounds = overlayWindow.getBounds()
+  const overInteractiveRegion = [gripperBounds, ...interactiveBounds].some((bounds) => (
+    isPointInsideWindowRegion(cursor, windowBounds, bounds)
+  ))
+  setMousePassthrough(!overInteractiveRegion)
 }
 
 function toggleOverlay() {
@@ -625,6 +626,20 @@ if (!hasSingleInstanceLock) {
     const values = [bounds?.x, bounds?.y, bounds?.width, bounds?.height]
     if (!values.every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0) return
     gripperBounds = bounds
+    updateGripperInteractivity()
+  })
+  ipcMain.on('overlay:interactive-bounds', (event, bounds) => {
+    if (event.sender !== overlayWindow?.webContents) return
+    interactiveBounds = Array.isArray(bounds)
+      ? bounds.filter((region) => (
+          Number.isFinite(region?.x)
+          && Number.isFinite(region?.y)
+          && Number.isFinite(region?.width)
+          && Number.isFinite(region?.height)
+          && region.width > 0
+          && region.height > 0
+        )).slice(0, 4)
+      : []
     updateGripperInteractivity()
   })
   createOverlay()

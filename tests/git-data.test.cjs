@@ -137,18 +137,65 @@ test('summarizes GitHub check rollups for branch hover details', () => {
     { name: 'Lint', status: 'COMPLETED', conclusion: 'FAILURE' },
     { name: 'Preview', status: 'IN_PROGRESS', conclusion: '' },
     { context: 'deploy', state: 'SUCCESS' },
+    { name: 'Optional', status: 'COMPLETED', conclusion: 'SKIPPED' },
+    { name: 'Advisory', status: 'COMPLETED', conclusion: 'NEUTRAL' },
   ]), {
-    total: 4,
+    total: 6,
     passed: 2,
     failed: 1,
     pending: 1,
+    skipped: 1,
+    neutral: 1,
     items: [
       { name: 'Build', status: 'passed', workflow: 'CI' },
       { name: 'Lint', status: 'failed', workflow: null },
-      { name: 'Preview', status: 'pending', workflow: null },
+      { name: 'Preview', status: 'running', workflow: null },
       { name: 'deploy', status: 'passed', workflow: null },
+      { name: 'Optional', status: 'skipped', workflow: null },
+      { name: 'Advisory', status: 'neutral', workflow: null },
     ],
   })
+})
+
+test('uses commit anchors instead of incoming counts for a merge-heavy spine', (context) => {
+  const repoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'vertebrae-spine-'))
+  context.after(() => fs.rmSync(repoPath, { recursive: true, force: true }))
+  const git = (args) => run(repoPath, args)
+  git(['init', '-b', 'main'])
+  git(['config', 'user.name', 'Spine Test'])
+  git(['config', 'user.email', 'spine@test.invalid'])
+  git(['commit', '--allow-empty', '-m', 'seed'])
+  git(['remote', 'add', 'origin', repoPath])
+  git(['switch', '-c', 'integration'])
+  let sharedBase
+  for (let index = 0; index < 3; index += 1) {
+    git(['switch', '-c', `side-${index}`])
+    git(['commit', '--allow-empty', '-m', 'one'])
+    git(['commit', '--allow-empty', '-m', 'two'])
+    git(['switch', 'integration'])
+    git(['merge', '--no-ff', `side-${index}`, '-m', `merge ${index}`])
+    if (index === 0) sharedBase = git(['rev-parse', 'HEAD'])
+  }
+  git(['update-ref', 'refs/remotes/origin/main', 'HEAD'])
+  for (const name of ['feature/alpha', 'feature/beta']) {
+    git(['switch', '-c', name, sharedBase])
+    git(['commit', '--allow-empty', '-m', name])
+  }
+  git(['switch', 'main'])
+  const state = readBranchState(repoPath)
+  assert.equal(state.remote.base.behind, 9)
+  assert.equal(state.remote.base.spineDistance, 3)
+  assert.equal(state.currentSpineDistance, 3)
+  for (const name of ['feature/alpha', 'feature/beta']) {
+    const branch = state.branches.find((item) => item.name === name)
+    assert.equal(branch.baseDistance, 2)
+    assert.equal(branch.mergeBaseSha, git(['rev-parse', '--short', sharedBase]))
+  }
+  git(['commit', '--allow-empty', '-m', 'local main diverges'])
+  const diverged = readBranchState(repoPath)
+  assert.equal(diverged.currentSpineDistance, null)
+  assert.equal(diverged.remote.base.spineDistance, null)
+  assert.equal(diverged.branches.find((branch) => branch.isCurrent).ahead, 1)
 })
 
 test('maps the monitored PR authors to their display names', () => {
