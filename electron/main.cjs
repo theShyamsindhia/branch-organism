@@ -2,7 +2,7 @@ const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, 
 const fs = require('node:fs')
 const path = require('node:path')
 const { fetchPullRequestHeads, fetchRemote, readGitHubPullRequests, reconcilePullRequestState } = require('./git-data.cjs')
-const { createRefreshQueue } = require('./refresh-queue.cjs')
+const { createRefreshCoordinator } = require('./refresh-queue.cjs')
 const { isNearRightEdge, isPointInsideWindowRegion, settleWindowBounds } = require('./window-layout.cjs')
 
 const LOCAL_REFRESH_MS = 5000
@@ -502,7 +502,7 @@ function refreshBranchState({ fetch = false } = {}) {
   return refreshQueue.request({ fetch })
 }
 
-async function runRefresh({ fetch }) {
+async function runRefresh({ fetch = false } = {}) {
   const generation = repoGeneration
   const targetRepoPath = repoPath
 
@@ -519,12 +519,16 @@ async function runRefresh({ fetch }) {
       }
       if (generation !== repoGeneration || targetRepoPath !== repoPath) return
       pullRequestState = reconcilePullRequestState(pullRequestState, nextPullRequestState)
+      branchState = { ...branchState, fetch: fetchState }
+      publishBranchState()
     }
+    if (fetch) return
 
-    const nextState = await readBranchStateAsync(targetRepoPath, pullRequestState, landscapeConfiguration)
-    if (generation !== repoGeneration || targetRepoPath !== repoPath) return
+    const snapshotPullRequests = pullRequestState
+    const nextState = await readBranchStateAsync(targetRepoPath, snapshotPullRequests, landscapeConfiguration)
+    if (generation !== repoGeneration || targetRepoPath !== repoPath || snapshotPullRequests !== pullRequestState) return
     if (nextState.status === 'ready') repoPath = nextState.repoPath
-    branchState = { ...nextState, fetch: fetchState }
+    branchState = { ...nextState, fetch: branchState?.fetch || fetchState }
     publishBranchState()
   } catch (error) {
     if (generation !== repoGeneration || targetRepoPath !== repoPath) return
@@ -618,7 +622,11 @@ if (!hasSingleInstanceLock) {
   } else {
     branchState = { status: 'error', message: 'Choose a Git repository to begin.' }
   }
-  refreshQueue = createRefreshQueue(runRefresh)
+  refreshQueue = createRefreshCoordinator({
+    local: runRefresh,
+    remote: () => runRefresh({ fetch: true }),
+    context: () => repoGeneration,
+  })
   ipcMain.handle('git-state:get', () => branchState)
   ipcMain.handle('layout-state:get', () => layoutState)
   ipcMain.on('overlay:gripper-bounds', (event, bounds) => {
@@ -627,6 +635,18 @@ if (!hasSingleInstanceLock) {
     if (!values.every(Number.isFinite) || bounds.width <= 0 || bounds.height <= 0) return
     gripperBounds = bounds
     updateGripperInteractivity()
+  })
+  ipcMain.on('overlay:open-external', (event, url) => {
+    if (event.sender !== overlayWindow?.webContents || typeof url !== 'string') return
+    // Only pull request pages on GitHub; the renderer never chooses arbitrary destinations.
+    let parsed
+    try {
+      parsed = new URL(url)
+    } catch {
+      return
+    }
+    if (parsed.protocol !== 'https:' || parsed.hostname !== 'github.com' || !/^\/[^/]+\/[^/]+\/pull\/\d+\/?$/.test(parsed.pathname)) return
+    shell.openExternal(parsed.toString())
   })
   ipcMain.on('overlay:interactive-bounds', (event, bounds) => {
     if (event.sender !== overlayWindow?.webContents) return

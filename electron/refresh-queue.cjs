@@ -26,4 +26,27 @@ function createRefreshQueue(run) {
   return { request }
 }
 
-module.exports = { createRefreshQueue }
+function createRefreshCoordinator({ local, remote, context = () => null }) {
+  const localQueue = createRefreshQueue(local)
+  let remoteRun = null
+  let remoteContext
+  return {
+    request({ fetch = false } = {}) {
+      if (!fetch) return localQueue.request()
+      if (remoteRun && remoteContext !== context()) {
+        return remoteRun.then(() => this.request({ fetch: true }))
+      }
+      // A slow network poll must neither block local HEAD checks nor accumulate
+      // another network poll every minute while the first is still running.
+      if (!remoteRun) {
+        remoteContext = context()
+        remoteRun = Promise.resolve().then(remote)
+          .then(() => localQueue.request())
+          .finally(() => { remoteRun = null })
+      }
+      return remoteRun
+    },
+  }
+}
+
+module.exports = { createRefreshQueue, createRefreshCoordinator }
