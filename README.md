@@ -30,7 +30,7 @@ This is not a metaphor pasted over arbitrary data. Every visible relationship co
 | Spine | The selected integration ref, usually `main` and preferably `origin/main` |
 | Junction | The real `git merge-base` between a branch and the integration ref |
 | Branch length | Commits unique to that ref, derived from `rev-list` |
-| Position along the spine | Distance from the integration head to the branch point |
+| Position along the spine | Order of branch points, newest at the top; spacing makes room for what hangs off each commit |
 | Dashed ghost limb | A remote-only PR head or remembered upstream movement |
 | Yellow branch | An open pull request |
 | Petal | One passing GitHub check |
@@ -69,7 +69,7 @@ The overlay has no canvas of its own. It sits over the work, so its visual syste
   </tr>
 </table>
 
-Passed checks bloom individually. Pending and failing checks keep their positions in the ring; the final pass completes the flower. The current ref ticks briefly every four seconds—not because Git needs drama, but because `HEAD` deserves to admit where it is.
+Passed checks bloom individually. Pending and failing checks keep their positions in the ring; the final pass completes the flower. When `HEAD` moves—a checkout, a commit, new edits—the current ref pulses once, then goes still. An overlay you live next to should only move when something happened.
 
 ## How it works
 

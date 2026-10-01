@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { branchDisplayName, branchTipPosition, spinePositionAtDistance } from './tree-layout.mjs'
+import { BRANCH_TIP_GAP, branchDisplayName, createSpineLayout, groupSpineJunctions, layoutBranchTips } from './tree-layout.mjs'
 import {
   RECENT_CHANGE_TTL_MS,
   branchSubjectKey,
@@ -19,6 +19,7 @@ const PR_AUTHOR_COLORS = {
 }
 const PR_OPEN_COLOR = '#e0c95a'
 const MERGED_COLOR = '#8f78a8'
+const CONFLICT_COLOR = '#c66f5d'
 const CHECK_COLORS = {
   passed: '#7fa884',
   failed: '#c66f5d',
@@ -42,6 +43,45 @@ const demoState = {
   base: 'main',
   comparisonBase: 'origin/main',
   totalBranches: 42,
+  activeBranchCount: 28,
+  pullRequestBranches: [
+    [2311, 'Bishal', 'bishal/onboarding-copy', 6, 2, 'CLEAN'],
+    [2314, 'Bishal', 'bishal/pricing-table', 3, 9, 'UNSTABLE'],
+    [2316, 'Sammy', 'sammy/search-latency', 9, 14, 'BLOCKED'],
+  ].map(([number, author, name, ahead, baseDistance, mergeStateStatus]) => ({
+    name,
+    ahead,
+    baseDistance,
+    behind: 2,
+    commits: Array.from({ length: Math.min(ahead, 5) }, (_, index) => ({ sha: `${number}${index}`.padEnd(7, '0'), subject: `${name} commit ${index + 1}` })),
+    hasLocalBranch: false,
+    isPullRequest: true,
+    lifecycle: 'open',
+    mergeBaseSha: 'd82405',
+    relative: '2 days ago',
+    sha: `${number}abc`,
+    timestamp: Date.now() / 1000 - number,
+    pullRequest: {
+      authorLogin: author.toLowerCase(),
+      authorName: author,
+      checks: {
+        total: 3,
+        passed: mergeStateStatus === 'CLEAN' ? 3 : 2,
+        failed: mergeStateStatus === 'UNSTABLE' ? 1 : 0,
+        pending: mergeStateStatus === 'BLOCKED' ? 1 : 0,
+        items: [
+          { name: 'Build', status: 'passed', workflow: 'CI' },
+          { name: 'Unit tests', status: mergeStateStatus === 'UNSTABLE' ? 'failed' : 'passed', workflow: 'CI' },
+          { name: 'Preview', status: mergeStateStatus === 'BLOCKED' ? 'pending' : 'passed', workflow: 'Deploy' },
+        ],
+      },
+      mergeStateStatus,
+      number,
+      state: 'OPEN',
+      title: `${name.split('/')[1].replace(/-/g, ' ')}`,
+      url: `https://github.com/example/studio/pull/${number}`,
+    },
+  })),
   fetch: { status: 'ready', checkedAt: Date.now() },
   recentChanges: [
     {
@@ -141,6 +181,7 @@ const demoState = {
       number: 2300 + index,
       mergeStateStatus,
       state: 'OPEN',
+      url: `https://github.com/example/studio/pull/${2300 + index}`,
       checks: {
         total: 7,
         passed: mergeStateStatus === 'DIRTY' ? 4 : 6,
@@ -298,17 +339,49 @@ function checkProgressLabel(branch) {
 const CHECK_LABELS = { passed: 'Passed', failed: 'Failed', running: 'Running', pending: 'Queued', skipped: 'Skipped', neutral: 'Neutral' }
 
 const HoverContext = createContext(null)
+// The overlay forwards mouse movement from whatever app sits underneath, so a
+// card opens only when the pointer rests on a mark, not when it passes over it.
+const HOVER_OPEN_DELAY_MS = 280
+const HOVER_CLOSE_DELAY_MS = 120
 
-function HoverGroup({ children, ...props }) {
+function HoverGroup({ children, onHover, ...props }) {
   const anchor = useRef(null)
+  const timer = useRef(null)
   const [hovered, setHovered] = useState(false)
+  const schedule = (next, delay) => {
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(() => setHovered(next), delay)
+  }
+  useEffect(() => () => window.clearTimeout(timer.current), [])
   return (
     <HoverContext.Provider value={{ anchor, hovered }}>
-      <g {...props} ref={anchor} onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+      <g {...props} ref={anchor} onMouseEnter={() => { schedule(true, HOVER_OPEN_DELAY_MS); onHover?.(true) }} onMouseLeave={() => { schedule(false, HOVER_CLOSE_DELAY_MS); onHover?.(false) }}>
         {children}
       </g>
     </HoverContext.Provider>
   )
+}
+
+function openExternal(url) {
+  if (!url) return
+  if (window.gitOverlay?.openExternal) window.gitOverlay.openExternal(url)
+  else window.open(url, '_blank', 'noopener')
+}
+
+function OpenLink({ url, children }) {
+  if (!url) return null
+  return (
+    <button className="branch-hover-card__link" type="button" onClick={() => openExternal(url)}>
+      {children} ↗
+    </button>
+  )
+}
+
+// SVG text cannot wrap, so names are shortened to the room left of their tip.
+const LABEL_MARGIN = 14
+function fitBranchName(name, availableWidth, fontSize, mono = false) {
+  const characterWidth = fontSize * (mono ? 0.62 : 0.56)
+  return branchDisplayName(name, Math.max(8, Math.floor((availableWidth - LABEL_MARGIN) / characterWidth)))
 }
 
 function HoverCard({ children, ...props }) {
@@ -454,7 +527,7 @@ function recentChangeDescription(change) {
 
 function MergedCheckpoint({ merge, mergeIndex, point }) {
   const checkItems = merge.checks?.items || []
-  const cardHeight = 148 + (checkItems.length ? 114 : 0)
+  const cardHeight = 148 + (checkItems.length ? 114 : 0) + (merge.url ? 24 : 0)
   const cardX = point.x < 250 ? clamp(point.x + 12, 12, 288) : clamp(point.x - 224, 12, 288)
   const cardY = clamp(point.y - 64, 12, 748 - cardHeight)
 
@@ -466,7 +539,7 @@ function MergedCheckpoint({ merge, mergeIndex, point }) {
       </circle>
       <CheckRing checks={merge.checks} color={MERGED_COLOR} hidePassed x={point.x} y={point.y} />
       <CheckBloom checks={merge.checks} color={MERGED_COLOR} x={point.x} y={point.y} />
-      <text className="recent-merge__label" textAnchor="end" x={point.x - 7} y={point.y - 5 - (mergeIndex % 2) * 6}>
+      <text className="recent-merge__label" textAnchor="start" x={point.x + 9} y={point.y + 3}>
         merged · #{merge.number}
       </text>
       <HoverCard x={cardX} y={cardY} width="220" height={cardHeight}>
@@ -480,6 +553,7 @@ function MergedCheckpoint({ merge, mergeIndex, point }) {
           <span>{checkSummary(merge.checks)}</span>
           <CheckList items={checkItems} />
           <span>merged · {formatTimestamp(merge.mergedAt)}</span>
+          <OpenLink url={merge.url}>Open PR #{merge.number}</OpenLink>
         </div>
       </HoverCard>
     </HoverGroup>
@@ -491,14 +565,16 @@ function ProductionLane({ integrationName, lane, spinePosition }) {
 
   const start = pointOnSpine(spinePosition)
   const length = clamp(74 + Math.sqrt(lane.productionAhead || 0) * 16, 82, 122)
+  // Production hangs to the right of the spine, mirroring how branches hang to
+  // the left, so it never climbs into the busy head of the spine.
   const tip = {
     x: clamp(start.x + length, 80, 500),
-    y: clamp(start.y - 42 - Math.sqrt(lane.productionAhead || 0) * 8, 76, 692),
+    y: clamp(start.y + 22 + Math.sqrt(lane.productionAhead || 0) * 2, 76, 700),
   }
   const curve = [
     start,
-    { x: start.x + length * 0.18, y: start.y + 5 },
-    { x: tip.x - length * 0.22, y: tip.y + 17 },
+    { x: start.x + length * 0.16, y: start.y },
+    { x: tip.x - length * 0.3, y: tip.y },
     tip,
   ]
   const path = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} C ${curve[1].x.toFixed(1)} ${curve[1].y.toFixed(1)}, ${curve[2].x.toFixed(1)} ${curve[2].y.toFixed(1)}, ${tip.x.toFixed(1)} ${tip.y.toFixed(1)}`
@@ -530,8 +606,8 @@ function ProductionLane({ integrationName, lane, spinePosition }) {
         )
       })}
       <circle className="production-lane__tip" cx={tip.x} cy={tip.y} r="3.2" />
-      <text className="production-lane__label" textAnchor="end" x={tip.x - 7} y={tip.y - 4}>{lane.name} · Production</text>
-      <text className="production-lane__status" textAnchor="end" x={tip.x - 7} y={tip.y + 7}>{status}</text>
+      <text className="production-lane__label" textAnchor="end" x={tip.x + 4} y={tip.y + 14}>{lane.name} · Production</text>
+      <text className="production-lane__status" textAnchor="end" x={tip.x + 4} y={tip.y + 24}>{status}</text>
       <HoverCard x={cardX} y={cardY} width="220" height="126">
         <div className="branch-hover-card__surface" xmlns="http://www.w3.org/1999/xhtml">
           <strong>{lane.name} · Production</strong>
@@ -547,11 +623,13 @@ function ProductionLane({ integrationName, lane, spinePosition }) {
 
 function RetiredMarker({ branch, index, spinePosition }) {
   const start = pointOnSpine(spinePosition)
+  // Retired history belongs to the integration line, so it sits on the right
+  // with merges and production; the left side is reserved for live work.
   const tip = {
-    x: clamp(start.x - 58 - index * 8, 56, 460),
-    y: clamp(start.y + 16 + index * 9, 78, 704),
+    x: clamp(start.x + 44 + index * 8, 56, 500),
+    y: clamp(start.y + 12 + index * 9, 78, 704),
   }
-  const path = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} C ${(start.x - 16).toFixed(1)} ${(start.y + 2).toFixed(1)}, ${(tip.x + 19).toFixed(1)} ${(tip.y - 5).toFixed(1)}, ${tip.x.toFixed(1)} ${tip.y.toFixed(1)}`
+  const path = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} C ${(start.x + 14).toFixed(1)} ${start.y.toFixed(1)}, ${(tip.x - 16).toFixed(1)} ${tip.y.toFixed(1)}, ${tip.x.toFixed(1)} ${tip.y.toFixed(1)}`
   const cardX = tip.x < 250 ? clamp(tip.x + 10, 12, 288) : clamp(tip.x - 224, 12, 288)
   const cardY = clamp(tip.y - 54, 12, 622)
 
@@ -561,7 +639,7 @@ function RetiredMarker({ branch, index, spinePosition }) {
       <path className="retired-branch__line" d={path} />
       <circle className="retired-branch__junction" cx={start.x} cy={start.y} r="2.2" />
       <circle className="retired-branch__tip" cx={tip.x} cy={tip.y} r="2.2" />
-      <text className="retired-branch__label" textAnchor="end" x={tip.x - 6} y={tip.y - 2}>{branch.name} · retired history</text>
+      <text className="retired-branch__label" textAnchor="end" x={Math.min(508, tip.x + 60)} y={tip.y + 13}>{branch.name} · retired history</text>
       <HoverCard x={cardX} y={cardY} width="220" height="112">
         <div className="branch-hover-card__surface" xmlns="http://www.w3.org/1999/xhtml">
           <strong>{branch.name} · Retired history</strong>
@@ -591,22 +669,27 @@ function selectRestingBranches(branches, currentOnSpine, limit = 7) {
     .sort((left, right) => (left.baseDistance || 0) - (right.baseDistance || 0))
 }
 
+// One PR per author first so every teammate is represented, then the remaining
+// slots go to their other PRs instead of being silently dropped.
 function selectPullRequestBranches(branches, limit = 4) {
   const authors = new Set()
+  const firstPerAuthor = []
+  const additional = []
 
-  return [...branches]
-    .sort((left, right) => (
-      Number(right.lifecycle !== 'open') - Number(left.lifecycle !== 'open')
-      || (right.timestamp || 0) - (left.timestamp || 0)
-      || Number(right.conflict) - Number(left.conflict)
-    ))
-    .filter((branch) => {
-      const author = branch.pullRequest?.authorLogin || branch.pullRequest?.authorName || branch.name
-      if (authors.has(author)) return false
+  for (const branch of [...branches].sort((left, right) => (
+    Number(right.lifecycle !== 'open') - Number(left.lifecycle !== 'open')
+    || (right.timestamp || 0) - (left.timestamp || 0)
+    || Number(right.conflict) - Number(left.conflict)
+  ))) {
+    const author = branch.pullRequest?.authorLogin || branch.pullRequest?.authorName || branch.name
+    if (authors.has(author)) additional.push(branch)
+    else {
       authors.add(author)
-      return true
-    })
-    .slice(0, limit)
+      firstPerAuthor.push(branch)
+    }
+  }
+
+  return [...firstPerAuthor, ...additional].slice(0, limit)
 }
 
 function branchGeometry(branch, index, spinePosition, tipPosition) {
@@ -627,10 +710,12 @@ function branchGeometry(branch, index, spinePosition, tipPosition) {
     x: startX - length * 0.5,
     y: startY + rise * 0.46 + bowDirection * bow * 0.38,
   }
+  // Every branch leaves the spine on the same horizontal tangent, so branches
+  // cut from one commit read as a single twig that splits, not near-misses.
   const curve = [
     [
       { x: startX, y: startY },
-      { x: startX - length * 0.08, y: startY + bowDirection * departure },
+      { x: startX - length * 0.14, y: startY },
       { x: startX - length * 0.3, y: startY + rise * 0.28 + bowDirection * bow },
       midpoint,
     ],
@@ -656,6 +741,8 @@ function branchGeometry(branch, index, spinePosition, tipPosition) {
 
 function branchColor(branch) {
   if (branch.lifecycle === 'merging' || branch.merged || branch.pullRequest?.state === 'MERGED') return MERGED_COLOR
+  // A conflict is the one state that needs action, so it outranks the PR accent.
+  if (branch.conflict) return CONFLICT_COLOR
   if (branch.pullRequest?.state === 'OPEN' && branch.lifecycle !== 'closing') return PR_OPEN_COLOR
   return PR_AUTHOR_COLORS[branch.pullRequest?.authorName] || PALETTE[hashName(branch.name) % PALETTE.length]
 }
@@ -667,7 +754,7 @@ function RecentChangeEvidence({ branch, changes, index, spinePosition, tipPositi
   const latestChange = visibleChanges[0]
   const branchMovement = visibleChanges.find((change) => change.kind === 'branch-advanced')
   const currentGeometry = branchGeometry(branch, index, spinePosition, tipPosition)
-  const previousGeometry = branchMovement
+  const previousGeometry = branchMovement && currentGeometry.anchored
     ? branchGeometry({ ...branch, ahead: branchMovement.fromAhead }, index, spinePosition, tipPosition)
     : null
   const markerX = previousGeometry?.tipX ?? currentGeometry.tipX
@@ -749,7 +836,32 @@ function RecentChangeEvidence({ branch, changes, index, spinePosition, tipPositi
   )
 }
 
-function TreeBranch({ branch, currentTick, index, integrationName, mergeSpinePosition, spinePosition, tipPosition }) {
+function WorkingChanges({ point, workingTree, repoPath }) {
+  if (workingTree?.status !== 'ready' || !workingTree.dirty) return null
+  const x = Math.min(point.x + 46, 492)
+  const y = point.y - 27
+  const stem = `M ${point.x} ${point.y} C ${point.x + 20} ${point.y}, ${x - 20} ${y}, ${x} ${y}`
+  return (
+    <HoverGroup className="working-changes">
+      <path className="branch-hit-area" d={stem} />
+      <path className="working-changes__stem" d={stem} />
+      <circle className="working-changes__tip" cx={x} cy={y} r="3.5" />
+      <text className="working-changes__label" x={x} y={y - 8} textAnchor="end">uncommitted</text>
+      <HoverCard x={clamp(x - 224, 12, 288)} y={clamp(y + 12, 12, 570)} width="220" height="178">
+        <div className="branch-hover-card__surface working-changes__card" xmlns="http://www.w3.org/1999/xhtml">
+          <strong>Uncommitted work · {workingTree.total} {workingTree.total === 1 ? 'file' : 'files'}</strong>
+          <span>{repoPath}</span>
+          <span>{workingTree.staged} staged · {workingTree.unstaged} unstaged</span>
+          <span>{workingTree.untracked} untracked · {workingTree.conflicted} conflicted</span>
+          <span>A file can be both staged and unstaged.</span>
+          <span>The ring is HEAD, your last commit. This offshoot is working changes, not a commit.</span>
+        </div>
+      </HoverCard>
+    </HoverGroup>
+  )
+}
+
+function TreeBranch({ branch, currentTick, highlighted, index, integrationName, mergeSpinePosition, spinePosition, tipPosition, workingTree, repoPath }) {
   const geometry = branchGeometry(branch, index, spinePosition, tipPosition)
   const { anchored, curve, startX, startY, stem, tipX, tipY } = geometry
   const mergePoint = Number.isFinite(mergeSpinePosition) ? pointOnSpine(mergeSpinePosition) : { x: startX, y: startY }
@@ -768,8 +880,8 @@ function TreeBranch({ branch, currentTick, index, integrationName, mergeSpinePos
   const conflictItems = (branch.conflictDetails?.files || []).slice(0, 5)
   const conflictTotal = branch.conflictDetails?.total ?? conflictItems.length
   const checkLabel = checkProgressLabel(branch)
-  const statusLabel = !anchored
-    ? 'off spine · inspect'
+  const branchStatus = !anchored
+    ? 'history unavailable'
     : branch.conflict
     ? 'conflict'
     : isMergedBranch
@@ -781,21 +893,34 @@ function TreeBranch({ branch, currentTick, index, integrationName, mergeSpinePos
         : branch.pullRequest?.isDraft
           ? checkLabel ? `draft · ${checkLabel}` : 'draft'
           : isOpenPullRequest ? checkLabel : null
+  // "current" lives on the status line so the name keeps all the room it can get.
+  const statusLabel = branch.isCurrent
+    ? [workingTree?.dirty ? 'current · edited' : 'current', branchStatus].filter(Boolean).join(' · ')
+    : branchStatus
   const labelX = tipX - 8
   const labelAnchor = 'end'
+  const pullRequestUrl = branch.pullRequest?.url
   const cardHeight = 166
+    + (branch.attachmentKind === 'merged-history' ? 30 : 0)
     + (isMergedResidual ? 16 : 0)
     + (checkItems.length ? 114 : 0)
     + (branch.conflict ? 28 + conflictItems.length * 13 : 0)
+    + (pullRequestUrl ? 24 : 0)
   const cardX = tipX < 250 ? clamp(tipX + 12, 12, 288) : clamp(tipX - 224, 12, 288)
   const cardY = clamp(tipY - 64, 12, 748 - cardHeight)
-  const currentLabel = `${branchDisplayName(branch.name, 24)} · current`
-  const restingLabel = branchDisplayName(branch.name)
+  const currentLabel = fitBranchName(branch.name, labelX, 9, true)
+  const displayName = branch.pullRequest?.isCrossRepository
+    ? `${branch.pullRequest.headRepositoryOwner?.login || branch.pullRequest.authorLogin}:${branch.name}`
+    : branch.name
+  const restingLabel = fitBranchName(branch.name === integrationName ? displayName : branch.name, labelX, 9)
+  const prAuthor = branch.pullRequest?.authorName || branch.pullRequest?.authorLogin
 
   return (
-    <HoverGroup
+    <g
       data-branch={branch.name}
       data-spine-distance={branch.baseDistance ?? 'unknown'}
+      data-attachment={branch.attachmentKind || 'direct'}
+      data-junction-highlighted={highlighted || undefined}
       className={`tree-branch ${branch.isCurrent ? 'tree-branch--current' : ''} ${branch.pullRequest ? 'tree-branch--pull-request' : ''} ${isOpenPullRequest ? 'tree-branch--pr-open' : ''} ${isReviewActive ? 'tree-branch--review-active' : ''} ${isMergedBranch ? 'tree-branch--merged' : ''} ${isMergedResidual ? 'tree-branch--merged-residual' : ''} ${isGhostPullRequest ? 'tree-branch--pr-ghost' : ''} ${branch.pullRequest?.isDraft ? 'tree-branch--draft' : ''} ${branch.lifecycle === 'merging' ? 'tree-branch--merging' : ''} ${branch.lifecycle === 'closing' ? 'tree-branch--closing' : ''} ${branch.conflict ? 'tree-branch--conflict' : ''} ${passedCheckCount ? 'tree-branch--checks-blooming' : ''} ${checksPassed ? 'tree-branch--checks-passed' : ''} ${currentTick && branch.isCurrent ? 'is-tick' : ''}`}
       style={{
         '--branch-color': color,
@@ -805,12 +930,14 @@ function TreeBranch({ branch, currentTick, index, integrationName, mergeSpinePos
         transformOrigin: `${startX}px ${startY}px`,
       }}
     >
-      <path className="branch-hit-area" d={stem} />
-      <circle className="branch-junction-ring" cx={startX} cy={startY} r={anchored ? 3 : 2}>
-        <title>{anchored ? 'shared starting commit' : 'starting commit is outside the displayed first-parent spine'} · {branch.mergeBaseSha || 'unknown'}</title>
-      </circle>
-      <path className="branch-stem" d={stem} />
-      {commits.map((commit, commitIndex) => {
+      <HoverGroup>
+      {anchored ? (
+        <>
+          <path className="branch-hit-area" d={stem} />
+          <path className="branch-stem" d={stem} />
+        </>
+      ) : <circle className="branch-hit-area" cx={tipX} cy={tipY} r="8" />}
+      {anchored && commits.map((commit, commitIndex) => {
         const ratio = commits.length === 1 ? 0.72 : 0.2 + (commitIndex / (commits.length - 1)) * 0.65
         const point = pointOnBranchCurve(curve, ratio)
         return (
@@ -832,6 +959,11 @@ function TreeBranch({ branch, currentTick, index, integrationName, mergeSpinePos
       {branch.conflict && (
         <path className="conflict-mark" d={`M ${tipX - 5} ${tipY - 5} l 10 10 M ${tipX + 5} ${tipY - 5} l -10 10`} />
       )}
+      {prAuthor && (
+        <text className="branch-label__author" x={labelX} y={tipY - 14} textAnchor={labelAnchor}>
+          {prAuthor} · #{branch.pullRequest.number}
+        </text>
+      )}
       <text className={branch.isCurrent ? 'current-label' : 'branch-label__name'} x={labelX} y={tipY - 3} textAnchor={labelAnchor}>
         {branch.isCurrent ? currentLabel : restingLabel}
       </text>
@@ -840,9 +972,10 @@ function TreeBranch({ branch, currentTick, index, integrationName, mergeSpinePos
       )}
       <HoverCard x={cardX} y={cardY} width="220" height={cardHeight}>
         <div className="branch-hover-card__surface" xmlns="http://www.w3.org/1999/xhtml">
-          <strong>{branch.name}</strong>
+          <strong>{displayName}</strong>
           <span>head · {branch.sha || 'unknown'} · base · {branch.mergeBaseSha || 'unknown'}</span>
           {!anchored && <span>Starting commit is outside the displayed first-parent spine, or unavailable locally.</span>}
+          {branch.attachmentKind === 'merged-history' && <span>Shared history enters {integrationName} at merge {branch.spineAnchorSha}; the fork commit is on its side history.</span>}
           {branch.pullRequest?.authorName && (
             <span>{branch.pullRequest.authorName === branch.pullRequest.authorLogin
               ? `@${branch.pullRequest.authorLogin}`
@@ -875,6 +1008,68 @@ function TreeBranch({ branch, currentTick, index, integrationName, mergeSpinePos
           <CheckList items={checkItems} />
           <span>{branch.ahead} ahead · {branch.behind} behind</span>
           <span>last activity · {branch.relative || 'unknown'}</span>
+          <OpenLink url={pullRequestUrl}>Open PR #{branch.pullRequest?.number}</OpenLink>
+        </div>
+      </HoverCard>
+      </HoverGroup>
+      {branch.isCurrent && <WorkingChanges point={{ x: tipX, y: tipY }} workingTree={workingTree} repoPath={repoPath} />}
+    </g>
+  )
+}
+
+function SpineJunction({ group, point, onHover, current }) {
+  const count = group.branches.length
+  const description = count > 1 && group.sharedAncestor
+    ? `${count} visible branches share this ancestor`
+    : `${count} visible ${count === 1 ? 'branch connects' : 'branches connect'} here`
+  const height = 90 + count * 15
+  return (
+    <HoverGroup className="spine-junction" data-junction-distance={group.distance} data-junction-count={count} onHover={onHover}>
+      <circle className="spine-junction__hit" cx={point.x} cy={point.y} r="9" />
+      {!current && <circle className="spine-junction__dot" cx={point.x} cy={point.y} r={count > 1 ? 4 : 2.8} />}
+      <title>{description} · {group.sha || 'unknown commit'}</title>
+      <HoverCard x={clamp(point.x - 234, 12, 288)} y={clamp(point.y - height / 2, 12, 748 - height)} width="220" height={height}>
+        <div className="branch-hover-card__surface spine-junction__card" xmlns="http://www.w3.org/1999/xhtml">
+          <strong>{description}</strong>
+          <span>commit · {group.sha || 'unknown'}</span>
+          {!group.sharedAncestor && <span>Shared history enters the spine here; fork commits may differ.</span>}
+          {group.branches.map((branch) => <span key={branchSubjectKey(branch)} title={branch.name}>{branchDisplayName(branch.name, 32)}</span>)}
+          <span className="spine-junction__note">Spacing aids readability, not elapsed time.</span>
+        </div>
+      </HoverCard>
+    </HoverGroup>
+  )
+}
+
+function HiddenBranches({ localBranches, unloadedCount, pullRequests, x, y }) {
+  const localCount = localBranches.length + unloadedCount
+  if (!localCount && !pullRequests.length) return null
+
+  const summary = [
+    localCount ? `+${localCount} ${localCount === 1 ? 'branch' : 'branches'}` : null,
+    pullRequests.length ? `${pullRequests.length} ${pullRequests.length === 1 ? 'PR' : 'PRs'}` : null,
+  ].filter(Boolean).join(' · ')
+  const listedBranches = localBranches.slice(0, 8)
+  const listedPullRequests = pullRequests.slice(0, 4)
+  const unlisted = localCount - listedBranches.length
+  const height = 78 + (listedBranches.length + listedPullRequests.length) * 13 + (unlisted ? 13 : 0)
+
+  return (
+    <HoverGroup className="hidden-branches">
+      <rect className="hidden-branches__hit" x={x - 176} y={y - 13} width="184" height="20" />
+      <circle className="hidden-branches__dot" cx={x} cy={y - 3} r="2.4" />
+      <text className="hidden-branches__label" textAnchor="end" x={x - 8} y={y}>{summary} not shown</text>
+      <HoverCard x={clamp(x + 12, 12, 288)} y={clamp(y - height + 20, 12, 748 - height)} width="220" height={height}>
+        <div className="branch-hover-card__surface" xmlns="http://www.w3.org/1999/xhtml">
+          <strong>Not drawn on the tree</strong>
+          <span className="spine-junction__note">The tree keeps the most active work readable; these still exist.</span>
+          {listedPullRequests.map((branch) => (
+            <span key={`pr-${branch.pullRequest.number}`} title={branch.name}>
+              PR #{branch.pullRequest.number} · {branch.pullRequest.authorName || branch.pullRequest.authorLogin}
+            </span>
+          ))}
+          {listedBranches.map((branch) => <span key={branch.name} title={branch.name}>{branchDisplayName(branch.name, 32)}</span>)}
+          {unlisted > 0 && <span>+{unlisted} more local {unlisted === 1 ? 'branch' : 'branches'}</span>}
         </div>
       </HoverCard>
     </HoverGroup>
@@ -882,11 +1077,12 @@ function TreeBranch({ branch, currentTick, index, integrationName, mergeSpinePos
 }
 
 function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
+  const [hoveredJunction, setHoveredJunction] = useState(null)
   const visibleBranches = state.branches
     .filter((branch) => !branch.merged || branch.isCurrent || branch.isBase)
     .slice(0, 15)
   const pullRequestBranches = selectPullRequestBranches(state.pullRequestBranches || [])
-  const pullRequestBranchNames = new Set(pullRequestBranches.map((branch) => branch.name))
+  const pullRequestNumbers = new Set(pullRequestBranches.map((branch) => branch.pullRequest.number))
   const recentMerges = (state.recentMerges || []).filter((merge) => Number.isFinite(merge.mergeDistance))
   const production = Number.isFinite(state.landscape?.production?.mergeDistance) ? state.landscape.production : null
   const retiredBranches = (state.landscape?.retired || []).filter((branch) => Number.isFinite(branch.mergeDistance))
@@ -907,13 +1103,13 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
     && baseAhead === 0
     && baseIncoming === 0
   const localBranches = selectRestingBranches(
-    visibleBranches.filter((branch) => !pullRequestBranchNames.has(branch.name) || branch.isCurrent),
+    visibleBranches.filter((branch) => !pullRequestNumbers.has(branch.pullRequest?.number) || branch.isCurrent),
     currentOnSpine,
   )
-  const localBranchNames = new Set(localBranches.map((branch) => branch.name))
+  const localPullRequestNumbers = new Set(localBranches.map((branch) => branch.pullRequest?.number).filter(Boolean))
   const branches = [
     ...localBranches,
-    ...pullRequestBranches.filter((branch) => !localBranchNames.has(branch.name)),
+    ...pullRequestBranches.filter((branch) => !localPullRequestNumbers.has(branch.pullRequest.number)),
   ].sort((left, right) => (left.baseDistance || 0) - (right.baseDistance || 0))
   const changesBySubject = new Map()
   for (const change of recentChanges || []) {
@@ -922,16 +1118,50 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
     subjectChanges.sort((left, right) => right.observedAt - left.observedAt)
     changesBySubject.set(change.subjectKey, subjectChanges)
   }
-  const basePointAt = (distance) => pointOnSpine(spinePositionAtDistance(distance))
   const exactBaseIndex = baseCommits.findIndex((commit) => commit.sha === baseBranch?.sha)
   const currentBaseDistance = state.currentSpineDistance ?? (baseIsCurrent
     ? (exactBaseIndex >= 0 ? exactBaseIndex : state.remote?.base?.spineDistance)
     : currentBranch?.baseDistance)
-  const currentBasePoint = basePointAt(currentBaseDistance)
-  const currentSpineLabel = `${branchDisplayName(state.current, 24)} · current`
-  const currentLabelSide = currentBasePoint.x + 13 + currentSpineLabel.length * 5.4 < 508 ? 1 : -1
-  const remoteBasePoint = basePointAt(0)
   const upstreamDistance = baseIncoming > 0 ? state.remote?.base?.spineDistance : upstreamMovement?.distance
+  // Each commit reserves the vertical room its marks need below it: a stacked
+  // tip per branch on the left; flowers, HEAD and production on the right.
+  // The two sides share the same height, so a commit takes the larger of them.
+  const spinePosition = createSpineLayout([
+    // The root carries the integration labels and the uncommitted offshoot above HEAD.
+    { distance: 0, room: 40, side: 'right' },
+    ...branches.map((branch) => ({ distance: branch.baseDistance, room: BRANCH_TIP_GAP, side: 'left' })),
+    ...branches.map((branch) => branch.mergeDistance),
+    ...recentMerges.map((merge) => ({ distance: merge.mergeDistance, room: 26, side: 'right' })),
+    ...retiredBranches.map((branch) => ({ distance: branch.mergeDistance, room: 24, side: 'right' })),
+    ...baseCommits.map((_, index) => index),
+    { distance: production?.mergeDistance, room: 40, side: 'right' },
+    currentOnSpine ? { distance: currentBaseDistance, room: 34, side: 'right' } : null,
+    upstreamDistance,
+  ], { yAt: (t) => pointOnSpine(t).y })
+  const junctions = groupSpineJunctions(branches)
+  const basePointAt = (distance) => pointOnSpine(spinePosition(distance))
+  const currentBasePoint = basePointAt(currentBaseDistance)
+  const tipPositions = layoutBranchTips(
+    branches.map((branch) => (Number.isFinite(branch.baseDistance) ? basePointAt(branch.baseDistance).y : NaN)),
+    currentOnSpine ? currentBasePoint.y : null,
+  )
+  const drawnLocalNames = new Set(branches.filter((branch) => !branch.isPullRequest).map((branch) => branch.name))
+  const drawnPullRequestNumbers = new Set(branches.map((branch) => branch.pullRequest?.number).filter(Boolean))
+  const hiddenLocalBranches = state.branches.filter((branch) => (
+    !branch.merged
+    && !branch.isBase
+    && !(branch.isCurrent && currentOnSpine)
+    && !drawnLocalNames.has(branch.name)
+    && !drawnPullRequestNumbers.has(branch.pullRequest?.number)
+  ))
+  const unloadedBranchCount = Math.max(0, (state.activeBranchCount ?? state.branches.length) - state.branches.length)
+  const hiddenPullRequests = (state.pullRequestBranches || []).filter((branch) => !drawnPullRequestNumbers.has(branch.pullRequest?.number))
+  const hiddenMarkerY = clamp((tipPositions.at(-1) ?? 240) + 44, 120, 736)
+  // HEAD is labelled on the right of the spine, below its dot: the left side
+  // belongs to branches, and the uncommitted offshoot rises above it.
+  const currentLabelX = currentBasePoint.x + 12
+  const currentSpineLabel = fitBranchName(state.current, 508 - currentLabelX, 9, true)
+  const remoteBasePoint = basePointAt(0)
   const showUpstreamGhost = Number.isFinite(upstreamDistance) && upstreamDistance > 0
   const upstreamStartPoint = basePointAt(upstreamDistance)
   const upstreamSide = upstreamStartPoint.x > 390 ? -1 : 1
@@ -967,21 +1197,11 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
           <path className="base-spine__line" d={SPINE_PATH} />
           {showUpstreamGhost && (
             <g className="upstream-ghost">
-              <title>{baseIncoming > 0 ? `${baseIncoming} incoming commits across ${upstreamDistance} first-parent steps` : 'Recently observed upstream movement · already synced'}</title>
+              <title>{baseIncoming > 0 ? `${baseIncoming} incoming commits across ${upstreamDistance} first-parent steps${baseIsCurrent ? '' : ` · local ${state.base} is here`}` : 'Recently observed upstream movement · already synced'}</title>
               <path className="upstream-ghost__underlay" d={upstreamGhostPath} />
               <path className="upstream-ghost__line" d={upstreamGhostPath} />
               <circle className="upstream-ghost__checkpoint" cx={upstreamStartPoint.x} cy={upstreamStartPoint.y} r="2.4" />
               <circle className="upstream-ghost__head" cx={remoteBasePoint.x} cy={remoteBasePoint.y} r="2.8" />
-              <text
-                className="upstream-ghost__label"
-                textAnchor="end"
-                x="502"
-                y={upstreamStartPoint.y + 22}
-              >
-                {baseIncoming > 0 ? `${baseIncoming} incoming` : 'recent upstream change'}
-              </text>
-              {baseIncoming > 0 && <text className="upstream-ghost__label" textAnchor="end" x="502" y={upstreamStartPoint.y + 34}>across {upstreamDistance} spine {upstreamDistance === 1 ? 'step' : 'steps'}</text>}
-              {!baseIsCurrent && baseIncoming > 0 && <text className="base-state" textAnchor="end" x={upstreamStartPoint.x - 8} y={upstreamStartPoint.y + 3}>{state.base} · local</text>}
             </g>
           )}
           {baseCommits.map((commit, commitIndex) => {
@@ -994,29 +1214,25 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
           })}
           {currentOnSpine && (
             <g className={`spine-current-position ${baseFullySynced ? 'is-synced' : ''}`}>
-              <title>Current: {state.current} at {currentBranch?.sha || baseBranch?.sha || 'unknown commit'}</title>
+              <title>Current: {state.current} at {currentBranch?.sha || baseBranch?.sha || 'unknown commit'} · {currentBranch?.behind || 0} commits behind {base}</title>
               <circle className="spine-current-ring" cx={currentBasePoint.x} cy={currentBasePoint.y} r="7" />
               <circle className="spine-current-dot" cx={currentBasePoint.x} cy={currentBasePoint.y} r="2.5" />
-              <line
-                className="spine-current-leader"
-                x1={currentBasePoint.x + currentLabelSide * 5}
-                x2={currentBasePoint.x + currentLabelSide * 10}
-                y1={currentBasePoint.y}
-                y2={currentBasePoint.y}
-              />
-              <text
-                className="spine-current-label"
-                textAnchor={currentLabelSide === 1 ? 'start' : 'end'}
-                x={currentBasePoint.x + currentLabelSide * 13}
-                y={currentBasePoint.y + 2.5}
-              >
+              <text className="spine-current-label" textAnchor="start" x={currentLabelX} y={currentBasePoint.y + 13}>
                 {currentSpineLabel}
+              </text>
+              <text className="spine-current-detail" textAnchor="start" x={currentLabelX} y={currentBasePoint.y + 23}>
+                {state.workingTree?.dirty ? 'HEAD' : 'current'} · {currentBranch?.sha || baseBranch?.sha} · {currentBranch?.behind ? `${currentBranch.behind} behind` : 'synced'}
               </text>
             </g>
           )}
           <circle className="spine-root" cx="332" cy="62" r="3.3" />
           <text x="344" y="55" textAnchor="start" className="base-label">{state.base} · {integrationRole}</text>
-          <text x="344" y="66" textAnchor="start" className="base-source-label">{base}</text>
+          <text x="344" y="66" textAnchor="start" className="base-source-label">
+            {base}
+            {showUpstreamGhost && (
+              <tspan className="upstream-ghost__label"> · {baseIncoming > 0 ? `${baseIncoming} incoming` : 'recently moved'}</tspan>
+            )}
+          </text>
         </g>
 
         {retiredBranches.map((branch, index) => (
@@ -1024,7 +1240,7 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
             branch={branch}
             index={index}
             key={branch.name}
-            spinePosition={spinePositionAtDistance(branch.mergeDistance || 0)}
+            spinePosition={spinePosition(branch.mergeDistance)}
           />
         ))}
         {recentMerges.map((merge, mergeIndex) => (
@@ -1036,24 +1252,27 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
           />
         ))}
         {branches.map((branch, index) => {
-          const spinePosition = spinePositionAtDistance(branch.baseDistance)
-          const tipPosition = branchTipPosition(index, branches.length)
+          const position = spinePosition(branch.baseDistance)
+          const tipPosition = tipPositions[index]
           return (
             <g key={branch.isPullRequest ? `pr-${branch.pullRequest.number}` : branch.name}>
               <TreeBranch
                 branch={branch}
                 currentTick={currentTick}
+                highlighted={hoveredJunction !== null && hoveredJunction === branch.baseDistance}
                 index={index}
                 integrationName={state.base}
-                mergeSpinePosition={Number.isFinite(branch.mergeDistance) ? spinePositionAtDistance(branch.mergeDistance) : undefined}
-                spinePosition={spinePosition}
+                mergeSpinePosition={Number.isFinite(branch.mergeDistance) ? spinePosition(branch.mergeDistance) : undefined}
+                spinePosition={position}
                 tipPosition={tipPosition}
+                workingTree={state.workingTree}
+                repoPath={state.repoPath}
               />
               <RecentChangeEvidence
                 branch={branch}
                 changes={changesBySubject.get(branchSubjectKey(branch)) || []}
                 index={index}
-                spinePosition={spinePosition}
+                spinePosition={position}
                 tipPosition={tipPosition}
               />
             </g>
@@ -1062,7 +1281,24 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
         <ProductionLane
           integrationName={state.base}
           lane={production}
-          spinePosition={spinePositionAtDistance(production?.mergeDistance || 0)}
+          spinePosition={spinePosition(production?.mergeDistance)}
+        />
+        {junctions.map((group) => (
+          <SpineJunction
+            key={group.distance}
+            group={group}
+            point={basePointAt(group.distance)}
+            current={currentOnSpine && currentBaseDistance === group.distance}
+            onHover={(hovered) => setHoveredJunction(hovered ? group.distance : null)}
+          />
+        ))}
+        {currentOnSpine && <WorkingChanges point={currentBasePoint} workingTree={state.workingTree} repoPath={state.repoPath} />}
+        <HiddenBranches
+          localBranches={hiddenLocalBranches}
+          pullRequests={hiddenPullRequests}
+          unloadedCount={unloadedBranchCount}
+          x={270}
+          y={hiddenMarkerY}
         />
       </g>
       <g className="tree-hover-layer" />
@@ -1071,16 +1307,26 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
 }
 
 function EmptyState({ state }) {
+  const fallback = state.status === 'loading' ? 'Reading the repository…' : 'Choose a Git repository from the menu bar.'
   return (
     <div className="tree-state">
       <span>vertebrae</span>
-      <p>{state.message || 'Choose a Git repository from the menu bar.'}</p>
+      <p>{state.message || fallback}</p>
     </div>
   )
 }
 
 export default function App() {
   const [state, setState] = useState(() => window.gitOverlay ? { status: 'loading' } : demoState)
+
+  // Dev-only: `?specimen=name` renders a captured snapshot from work/name.json
+  // (git-ignored), so layout changes can be checked against a real repository.
+  useEffect(() => {
+    if (window.gitOverlay || !import.meta.env.DEV) return
+    const specimen = new URLSearchParams(window.location.search).get('specimen')
+    if (!specimen || !/^[\w-]+$/.test(specimen)) return
+    fetch(`/work/${specimen}.json`).then((response) => response.json()).then(setState).catch(() => {})
+  }, [])
   const [currentTick, setCurrentTick] = useState(false)
   const [recentChanges, setRecentChanges] = useState(() => window.gitOverlay ? [] : demoState.recentChanges)
   const [upstreamMovement, setUpstreamMovement] = useState(null)
@@ -1129,18 +1375,26 @@ export default function App() {
     }
   }, [])
 
+  // HEAD pulses once when it actually moves (checkout, commit, edits), never on a timer:
+  // constant motion at the edge of the screen pulls the eye away from the work.
+  const currentHeadKey = state.status === 'ready'
+    ? [state.current, state.branches?.find((branch) => branch.isCurrent)?.sha, state.workingTree?.total ?? 0].join('|')
+    : null
+  const previousHeadKey = useRef(null)
   useEffect(() => {
-    let tickTimeout
-    const interval = window.setInterval(() => {
-      setCurrentTick(true)
-      tickTimeout = window.setTimeout(() => setCurrentTick(false), 260)
-    }, 4000)
+    if (!currentHeadKey) return undefined
+    const previous = previousHeadKey.current
+    previousHeadKey.current = currentHeadKey
+    if (previous === null || previous === currentHeadKey) return undefined
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return undefined
 
+    setCurrentTick(true)
+    const tickTimeout = window.setTimeout(() => setCurrentTick(false), 700)
     return () => {
-      window.clearInterval(interval)
       window.clearTimeout(tickTimeout)
+      setCurrentTick(false)
     }
-  }, [])
+  }, [currentHeadKey])
 
   useEffect(() => {
     const bounds = gripperRef.current?.getBoundingClientRect()

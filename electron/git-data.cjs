@@ -26,6 +26,31 @@ function git(repoPath, args, options = {}) {
   }
 }
 
+function readWorkingTree(repoPath) {
+  try {
+    // Keep leading status spaces and NUL-delimited filenames intact.
+    const records = execFileSync('git', ['--no-optional-locks', '-C', repoPath, 'status', '--porcelain=v1', '-z', '--untracked-files=all'], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000,
+    }).split('\0')
+    const result = { status: 'ready', total: 0, staged: 0, unstaged: 0, untracked: 0, conflicted: 0 }
+    for (let index = 0; index < records.length; index += 1) {
+      if (!records[index]) continue
+      const code = records[index].slice(0, 2)
+      result.total += 1
+      if (code === '??') result.untracked += 1
+      else if (['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'].includes(code)) result.conflicted += 1
+      else {
+        if (code[0] !== ' ') result.staged += 1
+        if (code[1] !== ' ') result.unstaged += 1
+      }
+      if (/[RC]/.test(code)) index += 1 // Rename/copy records include a second filename.
+    }
+    return { ...result, dirty: result.total > 0 }
+  } catch {
+    return { status: 'unavailable' }
+  }
+}
+
 function readRepositoryFingerprint(inputPath, pullRequestState = { status: 'idle' }, landscapeConfiguration = {}) {
   const repoPath = resolveRepositoryPath(inputPath)
   if (!repoPath) return null
@@ -37,6 +62,7 @@ function readRepositoryFingerprint(inputPath, pullRequestState = { status: 'idle
     '--format=%(refname):%(objectname)',
     'refs/heads',
     'refs/remotes',
+    'refs/branch-organism/pr',
   ], { allowFailure: true }) || ''
 
   return JSON.stringify([
@@ -46,7 +72,9 @@ function readRepositoryFingerprint(inputPath, pullRequestState = { status: 'idle
     refs,
     new Date().toISOString().slice(0, 10),
     pullRequestState.status || 'idle',
-    pullRequestState.checkedAt || 0,
+    pullRequestState.pullRequests || [],
+    (pullRequestState.transitions || []).filter((transition) => transition.expiresAt > Date.now()),
+    (pullRequestState.pullRequests || []).filter((pr) => pr.state === 'MERGED' && Date.now() - Date.parse(pr.mergedAt || '') <= RECENT_MERGE_MS).map((pr) => pr.number),
     landscapeConfiguration.integration || null,
     landscapeConfiguration.production ?? 'auto',
     Array.isArray(landscapeConfiguration.retired) ? [...landscapeConfiguration.retired].sort() : 'auto',
@@ -217,6 +245,7 @@ function runPullRequestQuery(executable, repository, state, limit, { includeComm
   const fields = [
     'number', 'headRefName', 'baseRefName', 'headRefOid', 'baseRefOid', 'author', 'isDraft', 'mergeCommit',
     'mergeable', 'mergeStateStatus', 'title', 'url', 'state', 'mergedAt', 'updatedAt', 'statusCheckRollup',
+    'isCrossRepository', 'headRepositoryOwner',
     ...(includeCommits ? ['commits'] : []),
   ].join(',')
   return new Promise((resolve, reject) => {
@@ -493,16 +522,21 @@ function fetchPullRequestHeads(repoPath, pullRequestState, landscapeConfiguratio
 function resolvePullRequestRef(repoPath, pullRequest) {
   const candidates = [
     pullRequest.number ? `refs/branch-organism/pr/${pullRequest.number}` : null,
-    pullRequest.headRefName,
-    pullRequest.headRefName ? `origin/${pullRequest.headRefName}` : null,
+    !pullRequest.isCrossRepository ? pullRequest.headRefName : null,
+    !pullRequest.isCrossRepository && pullRequest.headRefName ? `origin/${pullRequest.headRefName}` : null,
     pullRequest.headRefOid,
   ].filter(Boolean)
 
   for (const candidate of candidates) {
     const sha = git(repoPath, ['rev-parse', '--verify', '--quiet', `${candidate}^{commit}`], { allowFailure: true })
-    if (sha) return candidate
+    if (sha && (!pullRequest.headRefOid || sha === pullRequest.headRefOid)) return sha
   }
   return null
+}
+
+function matchesLocalBranch(pullRequest, branch) {
+  return pullRequest.headRefName === branch.name
+    && (!pullRequest.isCrossRepository || Boolean(branch.sha && pullRequest.headRefOid?.startsWith(branch.sha)))
 }
 
 function distanceFromBaseHead(repoPath, comparisonBase, commitSha) {
@@ -587,7 +621,7 @@ function readPullRequestBranch(repoPath, comparisonBase, current, pullRequest) {
     : null
   const mergeBaseSha = mergeBase
     ? git(repoPath, ['rev-parse', '--short', mergeBase], { allowFailure: true })
-    : pullRequest.baseRefOid?.slice(0, 7) || null
+    : null
   const distance = mergeBase
     ? git(repoPath, ['rev-list', '--first-parent', '--count', `${mergeBase}..${comparisonBase}`], { allowFailure: true })
     : null
@@ -617,7 +651,9 @@ function readPullRequestBranch(repoPath, comparisonBase, current, pullRequest) {
     conflictDetails,
     conflictSource: conflict ? 'github' : null,
     isBase: false,
-    isCurrent: pullRequest.headRefName === current,
+    isCurrent: pullRequest.headRefName === current && (
+      !pullRequest.isCrossRepository || Boolean(branchRef && branchRef === git(repoPath, ['rev-parse', 'HEAD'], { allowFailure: true }))
+    ),
     isPullRequest: true,
     lifecycle: pullRequest.lifecycle || 'open',
     mergeBaseSha,
@@ -647,6 +683,23 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       if (!ref) return null
       const sha = git(repoPath, ['rev-parse', '--verify', `${ref}^{commit}`], { allowFailure: true })
       return spineDistances.get(sha) ?? null
+    }
+    const attachments = new Map()
+    const spineAttachment = (ref) => {
+      if (attachments.has(ref)) return attachments.get(ref)
+      const direct = spineDistance(ref)
+      // A shared ancestor can be on a merged side history. Join at the first
+      // spine commit that contains it, but retain the actual fork SHA separately.
+      const checkpoint = direct !== null ? spineShas[direct] : ref && (
+        git(repoPath, ['rev-list', '--first-parent', '--ancestry-path', '--reverse', `${ref}..${comparisonBase}`], { allowFailure: true }) || ''
+      ).split('\n').find((sha) => spineDistances.has(sha))
+      const attachment = {
+        baseDistance: checkpoint ? spineDistances.get(checkpoint) : null,
+        spineAnchorSha: checkpoint?.slice(0, 7) || null,
+        attachmentKind: direct !== null ? 'direct' : checkpoint ? 'merged-history' : 'unknown',
+      }
+      attachments.set(ref, attachment)
+      return attachment
     }
     if (remote.base) remote.base.spineDistance = spineDistance(base)
     const productionWasConfigured = Object.prototype.hasOwnProperty.call(landscapeConfiguration, 'production')
@@ -697,7 +750,7 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       : []
 
     const pullRequests = (pullRequestState.pullRequests || []).map(normalizePullRequest)
-    const pullRequestTransitions = (pullRequestState.transitions || []).map(normalizePullRequest)
+    const pullRequestTransitions = (pullRequestState.transitions || []).filter((transition) => transition.expiresAt > Date.now()).map(normalizePullRequest)
     const unmergedBranchNames = new Set((git(repoPath, [
       'branch',
       '--format=%(refname:short)',
@@ -718,7 +771,7 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
         : '0\t0'
       const [behind = 0, ahead = 0] = (counts || '0\t0').split(/\s+/).map(Number)
       const merged = git(repoPath, ['merge-base', '--is-ancestor', branch.name, comparisonBase], { allowFailure: true }) !== null
-      const matchingPullRequests = pullRequests.filter((candidate) => candidate.headRefName === branch.name && candidate.baseRefName === base)
+      const matchingPullRequests = pullRequests.filter((candidate) => matchesLocalBranch(candidate, branch) && candidate.baseRefName === base)
       const pullRequest = matchingPullRequests.find((candidate) => candidate.state === 'OPEN') || matchingPullRequests[0]
       const remoteConflict = pullRequest?.state === 'OPEN' && (
         pullRequest.mergeable === 'CONFLICTING' || pullRequest.mergeStateStatus === 'DIRTY'
@@ -740,7 +793,7 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
         ...branch,
         ahead,
         ageDays,
-        baseDistance: spineDistance(mergeBase),
+        ...spineAttachment(mergeBase),
         behind,
         commits,
         conflict,
@@ -755,7 +808,6 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       }
     })
 
-    const localBranchNames = new Set(allBranches.map((branch) => branch.name))
     const pullRequestBranches = [...pullRequests, ...pullRequestTransitions]
       .filter((pullRequest) => (
         pullRequest.watched
@@ -765,11 +817,11 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       .filter((pullRequest, index, all) => all.findIndex((candidate) => candidate.number === pullRequest.number) === index)
       .map((pullRequest) => ({
         ...readPullRequestBranch(repoPath, comparisonBase, current, pullRequest),
-        hasLocalBranch: localBranchNames.has(pullRequest.headRefName),
+        hasLocalBranch: allBranches.some((branch) => matchesLocalBranch(pullRequest, branch)),
       }))
       .map((branch) => ({
         ...branch,
-        baseDistance: spineDistance(branch.mergeBaseSha),
+        ...spineAttachment(branch.mergeBaseSha),
         mergeDistance: spineDistance(branch.pullRequest.mergeCommitSha),
       }))
     const recentMerges = pullRequests
@@ -790,6 +842,7 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
         mergedAt: pullRequest.mergedAt,
         number: pullRequest.number,
         title: pullRequest.title,
+        url: pullRequest.url || null,
       }))
     const production = readProductionLane(repoPath, comparisonBase, productionName)
     if (production) production.mergeDistance = spineDistance(production.mergeBaseSha)
@@ -806,6 +859,7 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       current,
       base,
       comparisonBase,
+      workingTree: readWorkingTree(repoPath),
       currentSpineDistance: spineDistance('HEAD'),
       baseCommits: readCommits(repoPath, comparisonBase, 9, { firstParent: true }),
       landscape: {
@@ -826,6 +880,7 @@ function readBranchState(inputPath, pullRequestState = { status: 'idle', pullReq
       pullRequestBranches,
       recentMerges,
       totalBranches: allBranches.length,
+      activeBranchCount: activeBranches.length,
       updatedAt: Date.now(),
     }
   } catch (error) {
@@ -849,6 +904,7 @@ module.exports = {
   readGitHubPullRequests,
   readBranchState,
   readRepositoryFingerprint,
+  readWorkingTree,
   reconcilePullRequestState,
   resolveRepositoryPath,
   selectVisibleBranches,

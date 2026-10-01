@@ -2,6 +2,8 @@
   --neutral-node: #74807c;
   --neutral-stroke: rgba(104, 116, 112, 0.82);
   --neutral-track: rgba(104, 116, 112, 0.34);
+  --heading-ink: rgba(42, 50, 48, 0.9);
+  --heading-muted: rgba(55, 64, 61, 0.62);
   font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
   color: #e7ece9;
   background: transparent;
@@ -11,6 +13,13 @@
 
 * {
   box-sizing: border-box;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --heading-ink: rgba(226, 233, 229, 0.82);
+    --heading-muted: rgba(200, 210, 205, 0.5);
+  }
 }
 
 html,
@@ -99,7 +108,7 @@ body {
 }
 
 .repo-name {
-  fill: rgba(42, 50, 48, 0.9);
+  fill: var(--heading-ink);
   font-size: 13px;
   font-weight: 580;
   letter-spacing: -0.02em;
@@ -110,7 +119,7 @@ body {
 .base-label,
 .base-state,
 .tree-legend {
-  fill: rgba(55, 64, 61, 0.62);
+  fill: var(--heading-muted);
   font-family: 'Geist Mono', ui-monospace, monospace;
   font-size: 8px;
   letter-spacing: 0.025em;
@@ -119,6 +128,7 @@ body {
 .tree-frequency {
   fill: rgba(55, 64, 61, 0.44);
 }
+
 
 .branch-stem,
 .conflict-mark,
@@ -153,14 +163,6 @@ body {
   transition: stroke-width 120ms ease, opacity 120ms ease;
 }
 
-.branch-junction-ring {
-  fill: var(--branch-color);
-  fill-opacity: 0.16;
-  stroke: var(--branch-color);
-  stroke-width: 1.1;
-  vector-effect: non-scaling-stroke;
-}
-
 .branch-tip {
   fill: var(--branch-color);
   stroke: var(--branch-color);
@@ -183,8 +185,10 @@ body {
   stroke-width: 1.45;
 }
 
+/* Line grammar: solid = commits you have locally, dashed = exists only on the
+   remote, dotted = history. Each pattern carries exactly one meaning. */
 .tree-branch--pr-ghost .branch-stem {
-  stroke-dasharray: 2.5 3.8;
+  stroke-dasharray: 5 3.5;
   opacity: 0.82;
 }
 
@@ -210,7 +214,7 @@ body {
 
 .tree-branch--merged-residual .branch-stem {
   stroke-width: 0.9;
-  stroke-dasharray: 1.2 4.2;
+  stroke-dasharray: 0.1 3.4;
 }
 
 .tree-branch--merged-residual .branch-tip {
@@ -299,7 +303,8 @@ body {
 }
 
 .tree-branch.is-tick .branch-stem {
-  stroke-width: 3.4;
+  stroke-width: 2.6;
+  transition-duration: 320ms;
 }
 
 .tree-branch.is-tick .current-ring {
@@ -308,17 +313,7 @@ body {
 }
 
 .tree-branch--conflict .branch-stem {
-  stroke: #b66f65;
-  stroke-dasharray: 9 5 2 5;
-}
-
-.tree-branch--pr-open.tree-branch--conflict .branch-stem {
-  stroke: var(--branch-color);
-}
-
-.tree-branch--merging.tree-branch--conflict .branch-stem {
-  stroke: var(--branch-color);
-  stroke-dasharray: none;
+  stroke-width: 1.6;
 }
 
 .conflict-mark {
@@ -330,6 +325,36 @@ body {
   fill: var(--branch-color);
   font-size: 9px;
   font-weight: 540;
+}
+
+.spine-junction__hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.spine-junction__dot {
+  fill: #aab9b0;
+  pointer-events: none;
+}
+
+.tree-branch[data-junction-highlighted] {
+  opacity: 1;
+}
+
+.tree-branch[data-junction-highlighted] .branch-stem {
+  stroke-width: 2;
+}
+
+.spine-junction__note {
+  margin-top: 5px;
+  opacity: 0.7;
+}
+
+.branch-label__author {
+  fill: var(--branch-color);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 8px;
+  opacity: 0.8;
 }
 
 .branch-label__progress,
@@ -412,7 +437,7 @@ body {
 .recent-change__label {
   fill: var(--change-color);
   font-family: 'Geist Mono', ui-monospace, monospace;
-  font-size: 5.4px;
+  font-size: 8px;
   letter-spacing: 0.015em;
   opacity: 0;
   transition: opacity 140ms ease;
@@ -500,21 +525,6 @@ body {
   color: #c66f5d;
 }
 
-.tree-branch:hover .branch-hover-card,
-.production-lane:hover .branch-hover-card,
-.retired-branch:hover .branch-hover-card,
-.recent-merge:hover .branch-hover-card,
-.recent-change:hover .branch-hover-card,
-.tree-branch:hover .branch-hover-card,
-.recent-merge:hover .branch-hover-card {
-  opacity: 1;
-  visibility: visible;
-}
-
-.recent-change:hover .branch-hover-card {
-  pointer-events: auto;
-}
-
 .branch-hover-card__surface {
   display: grid;
   gap: 3px;
@@ -582,6 +592,47 @@ body {
   white-space: nowrap;
 }
 
+.branch-hover-card__link {
+  justify-self: start;
+  margin-top: 4px;
+  padding: 3px 7px;
+  border: 1px solid rgba(230, 237, 233, 0.18);
+  border-radius: 5px;
+  color: rgba(241, 246, 243, 0.9);
+  background: rgba(230, 237, 233, 0.06);
+  font: inherit;
+  cursor: pointer;
+}
+
+.branch-hover-card__link:hover {
+  border-color: rgba(230, 237, 233, 0.36);
+  background: rgba(230, 237, 233, 0.12);
+}
+
+.hidden-branches__hit {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.hidden-branches__dot {
+  fill: none;
+  stroke: var(--neutral-stroke);
+  stroke-width: 1;
+  stroke-dasharray: 0.1 2.6;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.hidden-branches__label {
+  fill: rgba(150, 162, 158, 0.78);
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 8px;
+}
+
+.hidden-branches:hover .hidden-branches__label {
+  fill: rgba(200, 210, 205, 0.95);
+}
+
 .base-spine .base-spine__underlay {
   display: none;
 }
@@ -605,7 +656,7 @@ body {
 .upstream-ghost__line {
   stroke: rgba(126, 166, 171, 0.82);
   stroke-width: 1.1;
-  stroke-dasharray: 2 4;
+  stroke-dasharray: 5 3.5;
 }
 
 .upstream-ghost__checkpoint {
@@ -689,10 +740,6 @@ body {
   stroke-width: 1.35;
 }
 
-.production-lane--drift .production-lane__line {
-  stroke-dasharray: 5 3;
-}
-
 .production-lane__junction,
 .production-lane__commit,
 .production-lane__tip {
@@ -728,24 +775,24 @@ body {
 
 .production-lane__label {
   fill: currentColor;
-  font-size: 6.8px;
+  font-size: 8.5px;
   font-weight: 560;
 }
 
 .production-lane__status {
-  fill: rgba(135, 154, 186, 0.7);
-  font-size: 5.8px;
+  fill: rgba(135, 154, 186, 0.82);
+  font-size: 8px;
 }
 
 .retired-branch {
   color: #8b858e;
-  opacity: 0.3;
+  opacity: 0.5;
 }
 
 .retired-branch__line {
   stroke: currentColor;
   stroke-width: 0.85;
-  stroke-dasharray: 1.5 3.5;
+  stroke-dasharray: 0.1 3.4;
 }
 
 .retired-branch__junction,
@@ -759,7 +806,7 @@ body {
 
 .retired-branch__label {
   fill: currentColor;
-  font-size: 5.8px;
+  font-size: 8px;
 }
 
 .recent-merge__ring {
@@ -781,11 +828,21 @@ body {
   opacity: 1;
 }
 
+/* The flower already says "merged"; the number appears on demand so the
+   busy head of the spine stays quiet. */
+.recent-merge__label {
+  transition: opacity 140ms ease;
+}
+
+.recent-merge:not(:hover) .recent-merge__label {
+  opacity: 0;
+}
+
 .recent-merge__label {
   fill: var(--branch-color);
   font-family: 'Geist Mono', ui-monospace, monospace;
-  font-size: 5.8px;
-  opacity: 0.48;
+  font-size: 8px;
+  opacity: 0.62;
 }
 
 .base-spine--current .base-spine__line {
@@ -815,6 +872,36 @@ body {
   vector-effect: non-scaling-stroke;
 }
 
+.spine-current-detail {
+  fill: var(--current-color, #8ab7c4);
+  font-size: 8px;
+  opacity: 0.8;
+}
+
+.working-changes__stem,
+.working-changes__tip {
+  fill: none;
+  stroke: #6e9bab;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.working-changes__stem {
+  opacity: 0.7;
+}
+
+.working-changes__label {
+  fill: #6e9bab;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 8px;
+}
+
+.working-changes__card {
+  grid-template-columns: minmax(0, 1fr);
+  overflow-wrap: anywhere;
+}
+
 .spine-current-label {
   fill: #6e9bab;
   font-family: 'Geist Mono', ui-monospace, monospace;
@@ -838,7 +925,7 @@ body {
 }
 
 .base-spine.is-tick .base-spine__line {
-  stroke-width: 3;
+  stroke-width: 2.6;
 }
 
 .base-spine.is-tick .spine-current-ring {
@@ -858,9 +945,9 @@ body {
 }
 
 .base-source-label {
-  fill: rgba(124, 137, 133, 0.58);
+  fill: rgba(124, 137, 133, 0.7);
   font-family: 'Geist Mono', ui-monospace, monospace;
-  font-size: 7px;
+  font-size: 8px;
 }
 
 .tree-state {
