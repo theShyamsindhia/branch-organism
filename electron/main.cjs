@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, 
 const fs = require('node:fs')
 const path = require('node:path')
 const { fetchPullRequestHeads, fetchRemote, readGitHubPullRequests, reconcilePullRequestState } = require('./git-data.cjs')
+const { executePullRequest, planPullRequest } = require('./pull-request.cjs')
 const { createRefreshCoordinator } = require('./refresh-queue.cjs')
 const { isNearRightEdge, isPointInsideWindowRegion, settleWindowBounds } = require('./window-layout.cjs')
 
@@ -34,6 +35,10 @@ let repoGeneration = 0
 let refreshQueue
 let initializationPromise
 const workerRequests = new Map()
+// Branch name → { status, message, number, url }. Lives here, not in the card,
+// so a push keeps reporting after the pointer leaves.
+let branchActions = {}
+const branchActionTimers = new Map()
 
 function getCommandLineRepoPath(argv = process.argv) {
   const direct = argv.find((argument) => argument.startsWith('--repo='))
@@ -248,6 +253,73 @@ function publishBranchState() {
     overlayWindow.webContents.send('git-state:changed', branchState)
   }
   updateTrayMenu()
+}
+
+function publishBranchActions() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.webContents.send('branch-actions:changed', branchActions)
+  }
+}
+
+function setBranchAction(branch, action, { expiresIn } = {}) {
+  clearTimeout(branchActionTimers.get(branch))
+  branchActionTimers.delete(branch)
+  branchActions = { ...branchActions, [branch]: { ...action, updatedAt: Date.now() } }
+  if (expiresIn) {
+    branchActionTimers.set(branch, setTimeout(() => {
+      branchActionTimers.delete(branch)
+      const { [branch]: _expired, ...rest } = branchActions
+      branchActions = rest
+      publishBranchActions()
+    }, expiresIn))
+  }
+  publishBranchActions()
+}
+
+function clearBranchActions() {
+  branchActionTimers.forEach(clearTimeout)
+  branchActionTimers.clear()
+  branchActions = {}
+  publishBranchActions()
+}
+
+// The renderer names a branch; everything else comes from the latest snapshot.
+function pullRequestRequest(branchName) {
+  if (typeof branchName !== 'string' || branchState?.status !== 'ready') return null
+  const branch = branchState.branches?.find((candidate) => candidate.name === branchName)
+  if (!branch) return null
+  const landscape = branchState.landscape || {}
+  return {
+    repoPath: branchState.repoPath,
+    branch: branch.name,
+    base: branchState.base,
+    comparisonBase: branchState.comparisonBase,
+    protectedBranches: [landscape.production?.name, ...(landscape.retired || []).map((retired) => retired.name)].filter(Boolean),
+    dirtyFiles: branchState.workingTree?.total || 0,
+    isCurrent: branch.isCurrent,
+  }
+}
+
+async function openPullRequest(branchName) {
+  if (['pushing', 'opening', 'checking'].includes(branchActions[branchName]?.status)) return
+  const request = pullRequestRequest(branchName)
+  if (!request) return
+  const targetRepoPath = request.repoPath
+  setBranchAction(branchName, { status: 'checking' })
+  try {
+    // Plan again rather than trusting the plan the card displayed.
+    const plan = await planPullRequest(request)
+    if (plan.blockers.length) throw new Error(plan.blockers[0])
+    const result = await executePullRequest(targetRepoPath, plan, {
+      onStep: (status) => setBranchAction(branchName, { status, remote: plan.push.remote }),
+    })
+    if (targetRepoPath !== repoPath) return
+    setBranchAction(branchName, { status: 'done', ...result }, { expiresIn: 90 * 1000 })
+    refreshBranchState({ fetch: true })
+  } catch (error) {
+    if (targetRepoPath !== repoPath) return
+    setBranchAction(branchName, { status: 'error', message: error.message }, { expiresIn: 5 * 60 * 1000 })
+  }
 }
 
 function getIncomingCount() {
@@ -490,6 +562,7 @@ async function trackRepository(candidatePath, { showError = false } = {}) {
   repoPath = candidateState.repoPath
   landscapeConfiguration = candidateLandscape
   pullRequestState = { status: 'idle', pullRequests: [] }
+  clearBranchActions()
   saveRepoPath(repoPath)
   branchState = { ...candidateState, fetch: { status: 'idle' } }
   publishBranchState()
@@ -629,6 +702,21 @@ if (!hasSingleInstanceLock) {
   })
   ipcMain.handle('git-state:get', () => branchState)
   ipcMain.handle('layout-state:get', () => layoutState)
+  ipcMain.handle('branch-actions:get', () => branchActions)
+  ipcMain.handle('pull-request:plan', async (event, branchName) => {
+    if (event.sender !== overlayWindow?.webContents) return null
+    const request = pullRequestRequest(branchName)
+    if (!request) return { blockers: ['This branch is no longer in the landscape.'], warnings: [] }
+    try {
+      return await planPullRequest(request)
+    } catch (error) {
+      return { blockers: [error.message], warnings: [] }
+    }
+  })
+  ipcMain.on('pull-request:open', (event, branchName) => {
+    if (event.sender !== overlayWindow?.webContents) return
+    openPullRequest(branchName)
+  })
   ipcMain.on('overlay:gripper-bounds', (event, bounds) => {
     if (event.sender !== overlayWindow?.webContents) return
     const values = [bounds?.x, bounds?.y, bounds?.width, bounds?.height]

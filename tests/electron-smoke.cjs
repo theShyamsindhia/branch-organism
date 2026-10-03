@@ -196,6 +196,8 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('git-state:get', () => ({ ...renderedState, fetch: { status: 'idle' } }))
   ipcMain.handle('layout-state:get', () => ({ docked: true }))
+  // A push in progress reports on the branch even while its card is closed.
+  ipcMain.handle('branch-actions:get', () => ({ 'feature/smoke': { status: 'pushing', remote: 'fork' } }))
   const window = new BrowserWindow({
     width: 540,
     height: 820,
@@ -257,9 +259,10 @@ app.whenReady().then(async () => {
     recentCheckOverflow: getComputedStyle(document.querySelector('.recent-change .check-list__rows')).overflowY,
     recentCheckScrollable: document.querySelector('.recent-change .check-list__rows').scrollHeight > document.querySelector('.recent-change .check-list__rows').clientHeight,
     recentCheckStatuses: [...document.querySelectorAll('.recent-change .check-list__status')].map((status) => status.textContent),
+    pushingLabel: document.querySelector('[data-branch="feature/smoke"] .branch-label__progress')?.textContent,
   })`)
 
-  if (!state.tree || !state.gripper || !state.overlayApi || !state.openPullRequest || !state.activeReview || state.activeReviewTransform === 'none' || !state.completedChecksSettled || !state.productionLane || !state.retiredMarker || !state.recentChangeTrace || state.recentChangeCount !== 2 || state.checkSegments !== 5 || state.openBloomPetals !== 3 || state.partialBloomPetals !== 1 || state.mergedCheckSegments !== 0 || state.mergedBloomPetals !== 6 || state.mergedHitTarget !== 'all' || !state.mergedHoverCard?.includes('Merged smoke-test PR') || !state.mergedHoverCard?.includes('6 passed') || state.mergedLabel !== 'merged · #41' || !state.mergedResidual || state.mergedResidualDash === 'none' || state.mergedResidualLabel !== 'merged' || !state.mergedResidualHoverCard?.includes('PR merged · branch ref still diverges from main') || state.mergedResidualPetals !== 2 || state.productionLabel !== 'prd · Production' || state.retiredLabel !== 'dev · retired history' || state.spineLabel !== 'main · Beta / Integration' || !state.recentChangeLabel?.startsWith('was · ') || !state.recentChangeHoverCard?.includes('head moved') || state.recentCheckRows !== 6 || state.recentCheckOverflow !== 'auto' || !state.recentCheckScrollable || !state.recentCheckStatuses.includes('Failed') || !state.recentCheckStatuses.includes('Queued') || errors.length || timerDelayMs > 200) {
+  if (!state.tree || !state.gripper || !state.overlayApi || !state.openPullRequest || !state.activeReview || state.activeReviewTransform === 'none' || !state.completedChecksSettled || !state.productionLane || !state.retiredMarker || !state.recentChangeTrace || state.recentChangeCount !== 2 || state.checkSegments !== 5 || state.openBloomPetals !== 3 || state.partialBloomPetals !== 1 || state.mergedCheckSegments !== 0 || state.mergedBloomPetals !== 6 || state.mergedHitTarget !== 'all' || !state.mergedHoverCard?.includes('Merged smoke-test PR') || !state.mergedHoverCard?.includes('6 passed') || state.mergedLabel !== 'merged · #41' || !state.mergedResidual || state.mergedResidualDash === 'none' || state.mergedResidualLabel !== 'merged' || !state.mergedResidualHoverCard?.includes('PR merged · branch ref still diverges from main') || state.mergedResidualPetals !== 2 || state.productionLabel !== 'prd · Production' || state.retiredLabel !== 'dev · retired history' || state.spineLabel !== 'main · Beta / Integration' || !state.recentChangeLabel?.startsWith('was · ') || !state.recentChangeHoverCard?.includes('head moved') || state.recentCheckRows !== 6 || state.recentCheckOverflow !== 'auto' || !state.recentCheckScrollable || !state.recentCheckStatuses.includes('Failed') || !state.recentCheckStatuses.includes('Queued') || !state.pushingLabel?.includes('pushing…') || errors.length || timerDelayMs > 200) {
     throw new Error(`Electron smoke check failed: ${JSON.stringify({ ...state, errors, timerDelayMs })}`)
   }
 
