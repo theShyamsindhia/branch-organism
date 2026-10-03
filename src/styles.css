@@ -1036,3 +1036,49 @@ body {
     animation-duration: 1ms;
   }
 }
+
+.pr-action {
+  display: grid;
+  gap: 3px;
+  margin-top: 4px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(230, 237, 233, 0.1);
+}
+
+.pr-action__status {
+  color: rgba(226, 233, 229, 0.82);
+}
+
+.pr-action__plan em {
+  color: rgba(226, 233, 229, 0.42);
+  font-style: normal;
+}
+
+.pr-action__title {
+  overflow-wrap: anywhere;
+  color: rgba(241, 246, 243, 0.88);
+}
+
+.pr-action__warning {
+  color: rgba(214, 178, 96, 0.86);
+}
+
+.pr-action__blocker {
+  overflow-wrap: anywhere;
+  color: #c66f5d;
+}
+
+.pr-action__buttons {
+  display: flex;
+  gap: 5px;
+}
+
+.pr-action__buttons .branch-hover-card__link,
+.pr-action > .branch-hover-card__link {
+  margin-top: 2px;
+}
+
+.pr-action__confirm {
+  border-color: rgba(214, 178, 96, 0.42);
+  color: rgba(244, 222, 168, 0.96);
+}

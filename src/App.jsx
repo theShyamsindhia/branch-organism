@@ -377,6 +377,87 @@ function OpenLink({ url, children }) {
   )
 }
 
+// Push-and-PR state per branch name, reported by the main process.
+const BranchActionsContext = createContext({})
+const ACTION_PROGRESS = { checking: 'checking…', pushing: 'pushing…', opening: 'opening PR…' }
+
+function branchActionLabel(action) {
+  if (!action) return null
+  if (ACTION_PROGRESS[action.status]) return ACTION_PROGRESS[action.status]
+  if (action.status === 'done') return action.updated ? `pushed to PR #${action.number}` : `opened PR #${action.number ?? ''}`
+  if (action.status === 'error') return 'PR failed'
+  return null
+}
+
+// Only local work that GitHub doesn't already have can be proposed.
+function canProposeBranch(branch) {
+  if (!window.gitOverlay?.planPullRequest || branch.isBase || branch.isPullRequest || branch.merged || !branch.ahead) return false
+  const openHead = branch.pullRequest?.state === 'OPEN' ? branch.pullRequest.headRefOid : null
+  return !(openHead && branch.sha && openHead.startsWith(branch.sha))
+}
+
+function PullRequestAction({ branch }) {
+  const action = useContext(BranchActionsContext)[branch.name]
+  const [plan, setPlan] = useState(null)
+  const openNumber = branch.pullRequest?.state === 'OPEN' ? branch.pullRequest.number : null
+
+  const review = () => {
+    setPlan('loading')
+    window.gitOverlay.planPullRequest(branch.name).then(setPlan, (error) => setPlan({ blockers: [error.message], warnings: [] }))
+  }
+  const confirm = () => {
+    window.gitOverlay.openPullRequest(branch.name)
+    setPlan(null)
+  }
+
+  if (ACTION_PROGRESS[action?.status]) {
+    return <span className="pr-action pr-action__status">{branchActionLabel(action)}{action.remote ? ` · ${action.remote}` : ''}</span>
+  }
+  if (action?.status === 'done' && !plan) {
+    return (
+      <span className="pr-action">
+        <span className="pr-action__status">{branchActionLabel(action)}</span>
+        <OpenLink url={action.url}>Open PR #{action.number}</OpenLink>
+      </span>
+    )
+  }
+  if (plan === 'loading') return <span className="pr-action pr-action__status">checking where this goes…</span>
+  if (plan) {
+    const commitCount = plan.push?.unpushed ?? 0
+    return (
+      <span className="pr-action pr-action__plan">
+        {plan.push?.needed && (
+          <span>push {commitCount} {commitCount === 1 ? 'commit' : 'commits'} → {plan.push.repository} <em>({plan.push.reason})</em></span>
+        )}
+        {plan.target && (plan.existing
+          ? <span>updates PR #{plan.existing.number}</span>
+          : <span>PR → {plan.target.repository} · {plan.target.base}</span>)}
+        {plan.description && <span className="pr-action__title">{plan.description.title}</span>}
+        {plan.warnings.map((warning) => <span className="pr-action__warning" key={warning}>{warning}</span>)}
+        {plan.blockers.map((blocker) => <span className="pr-action__blocker" key={blocker}>{blocker}</span>)}
+        <span className="pr-action__buttons">
+          {!plan.blockers.length && (
+            <button className="branch-hover-card__link pr-action__confirm" type="button" onClick={confirm}>
+              {plan.existing ? 'Push' : 'Push & open PR'}
+            </button>
+          )}
+          <button className="branch-hover-card__link" type="button" onClick={() => setPlan(null)}>
+            {plan.blockers.length ? 'Close' : 'Cancel'}
+          </button>
+        </span>
+      </span>
+    )
+  }
+  return (
+    <span className="pr-action">
+      {action?.status === 'error' && <span className="pr-action__blocker">{action.message}</span>}
+      <button className="branch-hover-card__link" type="button" onClick={review}>
+        {action?.status === 'error' ? 'Try again…' : openNumber ? `Push to PR #${openNumber}…` : 'Open PR…'}
+      </button>
+    </span>
+  )
+}
+
 // SVG text cannot wrap, so names are shortened to the room left of their tip.
 const LABEL_MARGIN = 14
 function fitBranchName(name, availableWidth, fontSize, mono = false) {
@@ -880,7 +961,9 @@ function TreeBranch({ branch, currentTick, highlighted, index, integrationName, 
   const conflictItems = (branch.conflictDetails?.files || []).slice(0, 5)
   const conflictTotal = branch.conflictDetails?.total ?? conflictItems.length
   const checkLabel = checkProgressLabel(branch)
-  const branchStatus = !anchored
+  const actionLabel = branchActionLabel(useContext(BranchActionsContext)[branch.name])
+  const proposable = canProposeBranch(branch)
+  const branchStatus = actionLabel || (!anchored
     ? 'history unavailable'
     : branch.conflict
     ? 'conflict'
@@ -892,7 +975,7 @@ function TreeBranch({ branch, currentTick, highlighted, index, integrationName, 
         ? 'closed'
         : branch.pullRequest?.isDraft
           ? checkLabel ? `draft · ${checkLabel}` : 'draft'
-          : isOpenPullRequest ? checkLabel : null
+          : isOpenPullRequest ? checkLabel : null)
   // "current" lives on the status line so the name keeps all the room it can get.
   const statusLabel = branch.isCurrent
     ? [workingTree?.dirty ? 'current · edited' : 'current', branchStatus].filter(Boolean).join(' · ')
@@ -906,6 +989,7 @@ function TreeBranch({ branch, currentTick, highlighted, index, integrationName, 
     + (checkItems.length ? 114 : 0)
     + (branch.conflict ? 28 + conflictItems.length * 13 : 0)
     + (pullRequestUrl ? 24 : 0)
+    + (proposable ? 64 : 0)
   const cardX = tipX < 250 ? clamp(tipX + 12, 12, 288) : clamp(tipX - 224, 12, 288)
   const cardY = clamp(tipY - 64, 12, 748 - cardHeight)
   const currentLabel = fitBranchName(branch.name, labelX, 9, true)
@@ -1009,6 +1093,7 @@ function TreeBranch({ branch, currentTick, highlighted, index, integrationName, 
           <span>{branch.ahead} ahead · {branch.behind} behind</span>
           <span>last activity · {branch.relative || 'unknown'}</span>
           <OpenLink url={pullRequestUrl}>Open PR #{branch.pullRequest?.number}</OpenLink>
+          {proposable && <PullRequestAction branch={branch} />}
         </div>
       </HoverCard>
       </HoverGroup>
@@ -1330,6 +1415,7 @@ export default function App() {
   const [currentTick, setCurrentTick] = useState(false)
   const [recentChanges, setRecentChanges] = useState(() => window.gitOverlay ? [] : demoState.recentChanges)
   const [upstreamMovement, setUpstreamMovement] = useState(null)
+  const [branchActions, setBranchActions] = useState({})
   const [layout, setLayout] = useState(() => ({
     docked: !window.gitOverlay && new URLSearchParams(window.location.search).get('dock') === 'right',
   }))
@@ -1344,6 +1430,23 @@ export default function App() {
     })
     const unsubscribe = window.gitOverlay.onBranchState((nextState) => {
       if (active) setState(nextState)
+    })
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!window.gitOverlay?.onBranchActions) return undefined
+
+    let active = true
+    window.gitOverlay.getBranchActions().then((nextActions) => {
+      if (active) setBranchActions(nextActions || {})
+    })
+    const unsubscribe = window.gitOverlay.onBranchActions((nextActions) => {
+      if (active) setBranchActions(nextActions || {})
     })
 
     return () => {
@@ -1445,7 +1548,9 @@ export default function App() {
 
   return (
     <main className={`transparent-overlay ${layout.docked ? 'is-docked-right' : ''}`}>
-      <div className="tree-canvas">{content}</div>
+      <div className="tree-canvas">
+        <BranchActionsContext.Provider value={branchActions}>{content}</BranchActionsContext.Provider>
+      </div>
       <div
         aria-label="Drag to move the Git tree"
         className="tree-gripper"
