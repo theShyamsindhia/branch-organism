@@ -119,20 +119,61 @@ function readTemplate(repoPath) {
   return ''
 }
 
-// Title from the first commit, body listing every commit above the repository's
-// own PR template, so nothing depends on gh guessing which commits belong.
+const TRAILER = /^[A-Za-z][\w-]*: \S/
+
+// Co-Authored-By and friends belong to the commit, not the description.
+function stripTrailers(message) {
+  const paragraphs = message.trim().split(/\n\s*\n/)
+  const last = paragraphs.at(-1)?.split('\n') || []
+  if (paragraphs.length && last.every((line) => TRAILER.test(line))) paragraphs.pop()
+  return paragraphs.join('\n\n').trim()
+}
+
+// Commit bodies are wrapped near 72 columns, and GitHub renders every newline
+// in a PR body as a break, so rejoin wrapped lines. Lists, quotes, headings,
+// tables and code keep their own lines.
+function unwrapMessage(message) {
+  const lines = []
+  let fenced = false
+  let joinable = false
+  for (const line of message.split('\n')) {
+    const fence = /^\s*```/.test(line)
+    const block = fence || fenced || !line.trim() || /^(\s{4}|\s*[>|#])/.test(line)
+    const item = /^\s*([-*+]|\d+[.)])\s/.test(line)
+    if (joinable && !block && !item) lines[lines.length - 1] += ` ${line.trim()}`
+    else lines.push(line)
+    if (fence) fenced = !fenced
+    joinable = !block && !fenced
+  }
+  return lines.join('\n')
+}
+
+function commitBody(commit) {
+  return unwrapMessage(stripTrailers(commit.body || ''))
+}
+
+// Title from the first commit. A single commit's message becomes the body, the
+// way GitHub fills it; several commits become a list, each with its message.
+// The repository's own PR template follows, so nothing depends on gh guessing.
 function describePullRequest(commits, template = '') {
   const ordered = [...commits].reverse()
   const title = ordered[0]?.subject || 'Update'
-  const list = ordered.map((commit) => `- ${commit.subject}`).join('\n')
-  return { title, body: [list, template].filter(Boolean).join('\n\n') }
+  const bodies = ordered.map(commitBody)
+  const summary = ordered.length === 1
+    ? bodies[0]
+    : ordered.map((commit, index) => (
+        bodies[index]
+          ? `- **${commit.subject}**\n\n${bodies[index].replace(/^(?=.)/gm, '  ')}`
+          : `- ${commit.subject}`
+      )).join(bodies.some(Boolean) ? '\n\n' : '\n')
+  return { title, body: [summary, template].filter(Boolean).join('\n\n') }
 }
 
 async function readCommitsAhead(repoPath, baseRef, branch) {
-  const lines = await gitOrNull(repoPath, ['log', '--format=%h%x09%s', `${baseRef}..refs/heads/${branch}`])
-  return (lines || '').split('\n').filter(Boolean).map((line) => {
-    const [sha, ...subject] = line.split('\t')
-    return { sha, subject: subject.join('\t') }
+  const records = await gitOrNull(repoPath, ['log', '--format=%h%x1f%s%x1f%b%x1e', `${baseRef}..refs/heads/${branch}`])
+  return (records || '').split('\x1e').map((record) => record.replace(/^\n/, '')).filter(Boolean).map((record) => {
+    const [sha, subject, body = ''] = record.split('\x1f')
+    return { sha, subject, body: body.trim() }
   })
 }
 

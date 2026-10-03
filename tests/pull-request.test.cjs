@@ -80,6 +80,60 @@ test('describes a pull request from its commits, oldest first, above the templat
   assert.equal(description.body, '- First\n- Second\n\n## Testing')
 })
 
+test('uses a single commit message as the body, unwrapped and without trailers', () => {
+  const description = describePullRequest([{
+    subject: 'Open a pull request',
+    body: [
+      'Resting on a branch now offers a PR, after',
+      'showing where it pushes.',
+      '',
+      '- Never forces. A remote branch with',
+      '  extra commits blocks the push.',
+      '- Refuses shared branches.',
+      '',
+      '```',
+      'git push fork',
+      'gh pr create',
+      '```',
+      '',
+      'Co-Authored-By: Someone <someone@test.invalid>',
+      'Signed-off-by: Local <local@test.invalid>',
+    ].join('\n'),
+  }])
+
+  assert.equal(description.title, 'Open a pull request')
+  assert.equal(description.body, [
+    'Resting on a branch now offers a PR, after showing where it pushes.',
+    '',
+    '- Never forces. A remote branch with extra commits blocks the push.',
+    '- Refuses shared branches.',
+    '',
+    '```',
+    'git push fork',
+    'gh pr create',
+    '```',
+  ].join('\n'))
+})
+
+test('nests each commit message under its subject when there are several', () => {
+  const description = describePullRequest([
+    { subject: 'Second', body: '' },
+    { subject: 'First', body: 'Why the first\nchange exists.' },
+  ])
+  assert.equal(description.body, '- **First**\n\n  Why the first change exists.\n\n- Second')
+})
+
+test('reads commit messages from the branch', async (context) => {
+  const workflow = createForkWorkflow(context)
+  fs.writeFileSync(path.join(workflow.repoPath, 'three.txt'), 'three\n')
+  run(workflow.repoPath, ['add', 'three.txt'])
+  run(workflow.repoPath, ['commit', '-m', 'Explain the third piece', '-m', 'It carries a body\nacross two lines.', '-m', 'Co-Authored-By: Pair <pair@test.invalid>'])
+
+  const plan = await planPullRequest(workflow.request())
+  assert.deepEqual(plan.commits.map((commit) => commit.subject), ['Explain the third piece', 'Add the second piece', 'Add the first piece'])
+  assert.match(plan.description.body, /- \*\*Explain the third piece\*\*\n\n {2}It carries a body across two lines\.$/)
+})
+
 test('pushes to the fork and opens the PR against origin', async (context) => {
   const workflow = createForkWorkflow(context)
   fs.mkdirSync(path.join(workflow.repoPath, '.github'))
