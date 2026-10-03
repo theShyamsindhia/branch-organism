@@ -4,6 +4,7 @@
   --neutral-track: rgba(104, 116, 112, 0.34);
   --heading-ink: rgba(42, 50, 48, 0.9);
   --heading-muted: rgba(55, 64, 61, 0.62);
+  --pulse: #3f8496;
   font-family: 'Geist', ui-sans-serif, system-ui, sans-serif;
   color: #e7ece9;
   background: transparent;
@@ -19,6 +20,7 @@
   :root {
     --heading-ink: rgba(226, 233, 229, 0.82);
     --heading-muted: rgba(200, 210, 205, 0.5);
+    --pulse: #9fd0dc;
   }
 }
 
@@ -257,8 +259,8 @@ body {
 .current-ring {
   fill: none;
   stroke: var(--branch-color);
-  stroke-width: 1;
-  opacity: 0.32;
+  stroke-width: 1.3;
+  opacity: 0.75;
   transform-box: fill-box;
   transform-origin: center;
   transition: opacity 100ms ease, transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -849,33 +851,54 @@ body {
   stroke-width: 1.8;
 }
 
-.base-spine .spine-current-ring {
+.spine-current-ring {
   fill: none;
   stroke: #6e9bab;
-  stroke-width: 1.2;
-  opacity: 0.4;
+  stroke-width: 1.5;
+  opacity: 0.9;
+  vector-effect: non-scaling-stroke;
   transform-box: fill-box;
   transform-origin: center;
   transition: opacity 100ms ease, transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.base-spine .spine-current-dot {
+.spine-current-dot {
   fill: #6e9bab;
   stroke: #6e9bab;
   stroke-width: 0.7;
   vector-effect: non-scaling-stroke;
 }
 
-.spine-current-leader {
-  stroke: #6e9bab;
+/* Heartbeat: a short bright segment travelling along each vein. */
+.vein-pulses {
+  pointer-events: none;
+}
+
+.vein-pulse {
+  fill: none;
+  stroke: var(--pulse);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+  vector-effect: non-scaling-stroke;
+}
+
+.vein-ripple {
+  fill: none;
+  stroke: var(--pulse);
   stroke-width: 1;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
   vector-effect: non-scaling-stroke;
 }
 
 .spine-current-detail {
   fill: var(--current-color, #8ab7c4);
+  font-family: 'Geist Mono', ui-monospace, monospace;
   font-size: 8px;
-  opacity: 0.8;
+  opacity: 0.85;
 }
 
 .working-changes__stem,
@@ -906,6 +929,7 @@ body {
   fill: #6e9bab;
   font-family: 'Geist Mono', ui-monospace, monospace;
   font-size: 9px;
+  font-weight: 560;
 }
 
 .is-docked-right .spine-current-label {
@@ -913,23 +937,12 @@ body {
   font-weight: 560;
 }
 
-.is-docked-right .spine-current-dot {
-  transform-box: fill-box;
-  transform-origin: center;
-  transform: scale(1.35);
-}
-
-.is-docked-right .spine-current-ring {
-  stroke-width: 1.6;
-  opacity: 0.68;
-}
-
 .base-spine.is-tick .base-spine__line {
   stroke-width: 2.6;
 }
 
-.base-spine.is-tick .spine-current-ring {
-  opacity: 0.92;
+.spine-current-position.is-tick .spine-current-ring {
+  opacity: 1;
   transform: scale(1.5);
 }
 
