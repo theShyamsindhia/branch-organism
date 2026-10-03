@@ -238,6 +238,39 @@ function pointOnSpine(t) {
   return pointOnCubic(SPINE_SEGMENTS[1], (bounded - 0.5) * 2)
 }
 
+// Arc length along the spine, so the heartbeat travels at an even speed.
+const SPINE_STEPS = 240
+const SPINE_ARC = (() => {
+  const lengths = [0]
+  let previous = pointOnSpine(0)
+  for (let step = 1; step <= SPINE_STEPS; step += 1) {
+    const point = pointOnSpine(step / SPINE_STEPS)
+    lengths.push(lengths[step - 1] + Math.hypot(point.x - previous.x, point.y - previous.y))
+    previous = point
+  }
+  return lengths
+})()
+
+function spineLengthAt(t) {
+  const position = clamp(t, 0, 1) * SPINE_STEPS
+  const index = Math.min(SPINE_STEPS - 1, Math.floor(position))
+  return SPINE_ARC[index] + (SPINE_ARC[index + 1] - SPINE_ARC[index]) * (position - index)
+}
+
+function sampledPath(pointAt, samples) {
+  const points = Array.from({ length: samples + 1 }, (_, index) => pointAt(index / samples))
+  let length = 0
+  for (let index = 1; index < points.length; index += 1) {
+    length += Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y)
+  }
+  const d = points.map((point, index) => `${index ? 'L' : 'M'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ')
+  return { d, length }
+}
+
+function spineVein(from, to) {
+  return sampledPath((s) => pointOnSpine(from + (to - from) * s), Math.max(2, Math.ceil(Math.abs(to - from) * SPINE_STEPS)))
+}
+
 function rememberUpstreamMovement(state) {
   const relation = state.remote?.base
   if (!state.repoPath || !relation?.remoteRef || !relation.remoteSha) return null
@@ -560,24 +593,38 @@ function MergedCheckpoint({ merge, mergeIndex, point }) {
   )
 }
 
-function ProductionLane({ integrationName, lane, spinePosition }) {
-  if (!lane) return null
-
+function productionLaneGeometry(lane, spinePosition, stackOffset = 0) {
   const start = pointOnSpine(spinePosition)
   const length = clamp(74 + Math.sqrt(lane.productionAhead || 0) * 16, 82, 122)
   // Production hangs to the right of the spine, mirroring how branches hang to
   // the left, so it never climbs into the busy head of the spine.
+  // stackOffset drops the lane below the header and HEAD label when they
+  // share its commit; the lane then leaves downward before turning right.
+  const drop = 22 + Math.sqrt(lane.productionAhead || 0) * 2 + stackOffset
   const tip = {
     x: clamp(start.x + length, 80, 500),
-    y: clamp(start.y + 22 + Math.sqrt(lane.productionAhead || 0) * 2, 76, 700),
+    y: clamp(start.y + drop, 76, 700),
   }
+  // When labels share its commit, the lane first follows the spine's own
+  // direction (shared history, like sibling twigs) and peels off below them.
+  const ahead = pointOnSpine(spinePosition + 0.01)
+  const tangentLength = Math.hypot(ahead.x - start.x, ahead.y - start.y) || 1
   const curve = [
     start,
-    { x: start.x + length * 0.16, y: start.y },
-    { x: tip.x - length * 0.3, y: tip.y },
+    stackOffset
+      ? { x: start.x + (ahead.x - start.x) / tangentLength * 26, y: start.y + (ahead.y - start.y) / tangentLength * 26 }
+      : { x: start.x + length * 0.16, y: start.y },
+    { x: tip.x - length * 0.45, y: tip.y },
     tip,
   ]
   const path = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} C ${curve[1].x.toFixed(1)} ${curve[1].y.toFixed(1)}, ${curve[2].x.toFixed(1)} ${curve[2].y.toFixed(1)}, ${tip.x.toFixed(1)} ${tip.y.toFixed(1)}`
+  return { curve, path, start, tip }
+}
+
+function ProductionLane({ integrationName, lane, spinePosition, stackOffset = 0 }) {
+  if (!lane) return null
+
+  const { curve, path, start, tip } = productionLaneGeometry(lane, spinePosition, stackOffset)
   const commits = (lane.commits || []).slice(0, 4).reverse()
   const status = lane.status === 'drift'
     ? `drift · ${integrationName} +${lane.integrationAhead} · ${lane.name} +${lane.productionAhead}`
@@ -1041,6 +1088,62 @@ function SpineJunction({ group, point, onHover, current }) {
   )
 }
 
+// The current position beats like a heart: each beat leaves the marker and
+// travels out along the spine, then into every branch as it reaches its
+// junction. Veins near you light first and brightest; far ones later, fainter.
+const PULSE_SPEED = 0.32 // viewBox units per millisecond
+const PULSE_LENGTH = 22
+const PULSE_FALLOFF = 900
+
+function VeinPulses({ origin, veins }) {
+  const layer = useRef(null)
+  const signature = veins.map((vein) => `${vein.d.length}:${Math.round(vein.delay)}:${Math.round(vein.length)}`).join('|')
+
+  useEffect(() => {
+    const element = layer.current
+    if (!element || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return undefined
+    const travel = veins.map((vein) => ({ start: vein.delay / PULSE_SPEED, duration: vein.length / PULSE_SPEED }))
+    const period = clamp(Math.max(0, ...travel.map(({ start, duration }) => start + duration)) + 900, 3600, 7200)
+    const paths = element.querySelectorAll('.vein-pulse')
+    const animations = [...paths].map((path, index) => {
+      const vein = veins[index]
+      const { start, duration } = travel[index]
+      const brightness = Math.max(0.12, 1 - vein.delay / PULSE_FALLOFF) * 0.9
+      const fade = Math.max(0.05, 1 - (vein.delay + vein.length) / PULSE_FALLOFF) * 0.9
+      return path.animate([
+        { offset: 0, strokeDashoffset: PULSE_LENGTH, opacity: 0 },
+        { offset: start / period, strokeDashoffset: PULSE_LENGTH, opacity: brightness },
+        { offset: Math.min(1, (start + duration) / period), strokeDashoffset: -vein.length, opacity: Math.min(brightness, fade) },
+        { offset: 1, strokeDashoffset: -vein.length, opacity: 0 },
+      ], { duration: period, iterations: Infinity, easing: 'linear' })
+    })
+    const ripple = element.querySelector('.vein-ripple')?.animate([
+      { transform: 'scale(1)', opacity: 0.7 },
+      { transform: 'scale(2.6)', opacity: 0, offset: 900 / period },
+      { transform: 'scale(2.6)', opacity: 0 },
+    ], { duration: period, iterations: Infinity, easing: 'ease-out' })
+    return () => {
+      animations.forEach((animation) => animation.cancel())
+      ripple?.cancel()
+    }
+  }, [signature])
+
+  if (!origin) return null
+  return (
+    <g className="vein-pulses" ref={layer} aria-hidden="true">
+      {veins.map((vein, index) => (
+        <path
+          className="vein-pulse"
+          d={vein.d}
+          key={index}
+          style={{ strokeDasharray: `${PULSE_LENGTH} ${vein.length + PULSE_LENGTH * 2}` }}
+        />
+      ))}
+      <circle className="vein-ripple" cx={origin.x} cy={origin.y} r="8" />
+    </g>
+  )
+}
+
 function HiddenBranches({ localBranches, unloadedCount, pullRequests, x, y }) {
   const localCount = localBranches.length + unloadedCount
   if (!localCount && !pullRequests.length) return null
@@ -1157,10 +1260,62 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
   const unloadedBranchCount = Math.max(0, (state.activeBranchCount ?? state.branches.length) - state.branches.length)
   const hiddenPullRequests = (state.pullRequestBranches || []).filter((branch) => !drawnPullRequestNumbers.has(branch.pullRequest?.number))
   const hiddenMarkerY = clamp((tipPositions.at(-1) ?? 240) + 44, 120, 736)
+  const productionStackOffset = production?.mergeDistance === 0
+    ? 14
+    : currentOnSpine && production?.mergeDistance === currentBaseDistance ? 30 : 0
+
+  // Heartbeat veins. On the spine the beat starts at HEAD; on your own branch
+  // it starts at the tip and runs down the stem before reaching the spine.
+  const currentIndex = branches.findIndex((branch) => branch.isCurrent)
+  const currentGeometry = !currentOnSpine && currentIndex >= 0 && Number.isFinite(branches[currentIndex].baseDistance)
+    ? branchGeometry(branches[currentIndex], currentIndex, spinePosition(branches[currentIndex].baseDistance), tipPositions[currentIndex])
+    : null
+  const veins = []
+  let pulseOrigin = null
+  let originT = null
+  let lead = 0
+  if (currentOnSpine) {
+    pulseOrigin = currentBasePoint
+    originT = spinePosition(currentBaseDistance)
+  } else if (currentGeometry) {
+    const stem = sampledPath((s) => pointOnBranchCurve(currentGeometry.curve, 1 - s), 40)
+    pulseOrigin = { x: currentGeometry.tipX, y: currentGeometry.tipY }
+    originT = spinePosition(branches[currentIndex].baseDistance)
+    lead = stem.length
+    veins.push({ ...stem, delay: 0 })
+  }
+  if (Number.isFinite(originT)) {
+    if (originT > 0) veins.push({ ...spineVein(originT, 0), delay: lead })
+    veins.push({ ...spineVein(originT, 1), delay: lead })
+    const originLength = spineLengthAt(originT)
+    branches.forEach((branch, index) => {
+      if (index === currentIndex || !Number.isFinite(branch.baseDistance)) return
+      const junctionT = spinePosition(branch.baseDistance)
+      const { curve } = branchGeometry(branch, index, junctionT, tipPositions[index])
+      veins.push({
+        ...sampledPath((s) => pointOnBranchCurve(curve, s), 40),
+        delay: lead + Math.abs(spineLengthAt(junctionT) - originLength),
+      })
+    })
+    if (production) {
+      const productionT = spinePosition(production.mergeDistance)
+      const { curve } = productionLaneGeometry(production, productionT, productionStackOffset)
+      veins.push({
+        ...sampledPath((s) => pointOnCubic(curve, s), 32),
+        delay: lead + Math.abs(spineLengthAt(productionT) - originLength),
+      })
+    }
+  }
   // HEAD is labelled on the right of the spine, below its dot: the left side
   // belongs to branches, and the uncommitted offshoot rises above it.
-  const currentLabelX = currentBasePoint.x + 12
-  const currentSpineLabel = fitBranchName(state.current, 508 - currentLabelX, 9, true)
+  // At the root the integration header owns the right, and the space up-left
+  // is always empty (tips hang below their junctions), so the HEAD label
+  // mirrors the header there. Elsewhere it sits right of the spine, below the dot.
+  const currentAtRoot = currentOnSpine && currentBaseDistance === 0
+  const currentLabelX = currentAtRoot ? currentBasePoint.x - 12 : currentBasePoint.x + 12
+  const currentLabelAnchor = currentAtRoot ? 'end' : 'start'
+  const currentLabelY = currentAtRoot ? currentBasePoint.y - 20 : currentBasePoint.y + 13
+  const currentSpineLabel = fitBranchName(state.current, currentAtRoot ? currentLabelX : 508 - currentLabelX, 9, true)
   const remoteBasePoint = basePointAt(0)
   const showUpstreamGhost = Number.isFinite(upstreamDistance) && upstreamDistance > 0
   const upstreamStartPoint = basePointAt(upstreamDistance)
@@ -1212,19 +1367,6 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
               </circle>
             )
           })}
-          {currentOnSpine && (
-            <g className={`spine-current-position ${baseFullySynced ? 'is-synced' : ''}`}>
-              <title>Current: {state.current} at {currentBranch?.sha || baseBranch?.sha || 'unknown commit'} · {currentBranch?.behind || 0} commits behind {base}</title>
-              <circle className="spine-current-ring" cx={currentBasePoint.x} cy={currentBasePoint.y} r="7" />
-              <circle className="spine-current-dot" cx={currentBasePoint.x} cy={currentBasePoint.y} r="2.5" />
-              <text className="spine-current-label" textAnchor="start" x={currentLabelX} y={currentBasePoint.y + 13}>
-                {currentSpineLabel}
-              </text>
-              <text className="spine-current-detail" textAnchor="start" x={currentLabelX} y={currentBasePoint.y + 23}>
-                {state.workingTree?.dirty ? 'HEAD' : 'current'} · {currentBranch?.sha || baseBranch?.sha} · {currentBranch?.behind ? `${currentBranch.behind} behind` : 'synced'}
-              </text>
-            </g>
-          )}
           <circle className="spine-root" cx="332" cy="62" r="3.3" />
           <text x="344" y="55" textAnchor="start" className="base-label">{state.base} · {integrationRole}</text>
           <text x="344" y="66" textAnchor="start" className="base-source-label">
@@ -1282,7 +1424,9 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
           integrationName={state.base}
           lane={production}
           spinePosition={spinePosition(production?.mergeDistance)}
+          stackOffset={productionStackOffset}
         />
+        <VeinPulses origin={pulseOrigin} veins={veins} />
         {junctions.map((group) => (
           <SpineJunction
             key={group.distance}
@@ -1292,6 +1436,20 @@ function GitTree({ state, currentTick, recentChanges, upstreamMovement }) {
             onHover={(hovered) => setHoveredJunction(hovered ? group.distance : null)}
           />
         ))}
+        {/* The current position draws last so flowers, stems and lanes never cover it. */}
+        {currentOnSpine && (
+          <g className={`spine-current-position ${baseFullySynced ? 'is-synced' : ''} ${currentTick ? 'is-tick' : ''}`}>
+            <title>Current: {state.current} at {currentBranch?.sha || baseBranch?.sha || 'unknown commit'} · {currentBranch?.behind || 0} commits behind {base}</title>
+            <circle className="spine-current-ring" cx={currentBasePoint.x} cy={currentBasePoint.y} r="8" />
+            <circle className="spine-current-dot" cx={currentBasePoint.x} cy={currentBasePoint.y} r="3.2" />
+            <text className="spine-current-label" textAnchor={currentLabelAnchor} x={currentLabelX} y={currentLabelY}>
+              {currentSpineLabel}
+            </text>
+            <text className="spine-current-detail" textAnchor={currentLabelAnchor} x={currentLabelX} y={currentLabelY + 10}>
+              {(currentBranch?.sha || baseBranch?.sha || '').slice(0, 7)} · {currentBranch?.behind ? `${currentBranch.behind} behind` : 'synced'}
+            </text>
+          </g>
+        )}
         {currentOnSpine && <WorkingChanges point={currentBasePoint} workingTree={state.workingTree} repoPath={state.repoPath} />}
         <HiddenBranches
           localBranches={hiddenLocalBranches}
